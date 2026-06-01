@@ -1,0 +1,6 @@
+# requirements.txt
+# Railway читает этот файл и устанавливает все библиотеки автоматически
+
+pyTelegramBotAPI==4.22.1
+gspread==6.1.2
+google-auth==2.29.0
