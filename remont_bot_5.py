@@ -308,12 +308,177 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 
 # ══════════════════════════════════════════════════════════════════
-# ШАГ 0: /start и /new — начало диалога
+# PERSISTENT MENU BUTTON (always visible at the bottom of the chat)
+# This runs once when the bot starts and sets up the menu
 # ══════════════════════════════════════════════════════════════════
-@bot.message_handler(commands=['start', 'new'])
+def setup_bot_commands():
+    """
+    Sets up the bot menu commands visible when user taps the / button.
+    Also sets a persistent keyboard button at the bottom of the chat.
+    """
+    try:
+        commands = [
+            types.BotCommand("/new",   "📋 Новая запись ТО/Ремонт"),
+            types.BotCommand("/help",  "❓ Помощь"),
+            types.BotCommand("/cancel","❌ Отменить текущую запись"),
+        ]
+        bot.set_my_commands(commands)
+        logger.info("✅ Команды бота установлены")
+    except Exception as e:
+        logger.warning(f"Не удалось установить команды: {e}")
+
+
+def get_main_menu_keyboard():
+    """
+    Persistent reply keyboard — always visible at the bottom.
+    User sees this button every time they open the bot.
+    """
+    markup = types.ReplyKeyboardMarkup(
+        resize_keyboard=True,
+        persistent=True,
+        is_persistent=True,
+    )
+    markup.add(types.KeyboardButton("📋 Новая запись ТО/Ремонт"))
+    return markup
+
+
+# ══════════════════════════════════════════════════════════════════
+# ШАГ 0: /start — приветствие с кнопкой
+# ══════════════════════════════════════════════════════════════════
+@bot.message_handler(commands=['start'])
 def cmd_start(message):
+    """
+    Welcome message shown when user first opens the bot.
+    Shows a friendly greeting + big inline button + persistent menu button.
+    """
+    clear_state(message.from_user.id)
+
+    # Inline button in the message
+    inline_markup = types.InlineKeyboardMarkup()
+    inline_markup.add(
+        types.InlineKeyboardButton(
+            "📋 Начать новую запись",
+            callback_data="start:new"
+        )
+    )
+
+    welcome_text = (
+        "👷 *Добро пожаловать в бот учёта ТО и ремонтов*
+"
+        "🏢 ТОО «Caspian Integrated Services»
+
+"
+        "Этот бот помогает быстро записать информацию "
+        "о проведённом техническом обслуживании или ремонте.
+
+"
+        "Данные автоматически сохраняются в реестр компании.
+
+"
+        "━━━━━━━━━━━━━━━━━━━━
+"
+        "Нажмите кнопку ниже чтобы начать:"
+    )
+
+    bot.send_message(
+        message.chat.id,
+        welcome_text,
+        parse_mode='Markdown',
+        reply_markup=get_main_menu_keyboard(),
+    )
+    bot.send_message(
+        message.chat.id,
+        "⬇️",
+        reply_markup=inline_markup,
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "start:new")
+def cb_start_new(call):
+    """User tapped the inline Start button."""
+    clear_state(call.from_user.id)
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    show_equipment_list(call.message.chat.id, call.from_user.id)
+
+
+# ══════════════════════════════════════════════════════════════════
+# /new command AND persistent button handler
+# ══════════════════════════════════════════════════════════════════
+@bot.message_handler(commands=['new'])
+def cmd_new(message):
     clear_state(message.from_user.id)
     show_equipment_list(message.chat.id, message.from_user.id)
+
+
+@bot.message_handler(func=lambda m: m.text == "📋 Новая запись ТО/Ремонт")
+def handle_menu_button(message):
+    """Handles the persistent menu button tap."""
+    clear_state(message.from_user.id)
+    show_equipment_list(message.chat.id, message.from_user.id)
+
+
+# ══════════════════════════════════════════════════════════════════
+# /help command
+# ══════════════════════════════════════════════════════════════════
+@bot.message_handler(commands=['help'])
+def cmd_help(message):
+    help_text = (
+        "❓ *Помощь*
+
+"
+        "Этот бот записывает данные о ТО и ремонтах в реестр компании.
+
+"
+        "*Как использовать:*
+"
+        "1. Нажмите 📋 *Новая запись ТО/Ремонт*
+"
+        "2. Выберите технику из списка
+"
+        "3. Выберите вид работ (ТО или Р)
+"
+        "4. Опишите выполненные работы
+"
+        "5. Введите моточасы или пробег
+"
+        "6. Введите ваше ФИО
+"
+        "7. Нажмите ✅ *Отправить* — данные сохранятся автоматически
+
+"
+        "*Команды:*
+"
+        "/new — начать новую запись
+"
+        "/cancel — отменить текущую запись
+"
+        "/help — показать эту справку
+
+"
+        "*Проблемы?* Обратитесь к администратору."
+    )
+    bot.send_message(
+        message.chat.id,
+        help_text,
+        parse_mode='Markdown',
+        reply_markup=get_main_menu_keyboard(),
+    )
+
+
+# ══════════════════════════════════════════════════════════════════
+# /cancel command
+# ══════════════════════════════════════════════════════════════════
+@bot.message_handler(commands=['cancel'])
+def cmd_cancel(message):
+    clear_state(message.from_user.id)
+    bot.send_message(
+        message.chat.id,
+        "❌ Запись отменена.
+
+Нажмите 📋 *Новая запись* чтобы начать заново.",
+        parse_mode='Markdown',
+        reply_markup=get_main_menu_keyboard(),
+    )
 
 
 def show_equipment_list(chat_id, user_id, edit_msg_id=None):
@@ -652,6 +817,9 @@ try:
 except Exception as _e:
     logger.error(f"❌ Нет подключения к Google Sheets: {_e}")
     logger.error("   Проверь GOOGLE_CREDENTIALS_JSON и GOOGLE_SHEET_ID")
+
+# Set up bot commands and menu
+setup_bot_commands()
 
 logger.info("✅ Бот готов. Нажми Ctrl+C чтобы остановить.")
 bot.infinity_polling(skip_pending=True, none_stop=True, interval=1)
