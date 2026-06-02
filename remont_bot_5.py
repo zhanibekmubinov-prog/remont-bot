@@ -1,19 +1,76 @@
-import telebot
-from telebot import types
+"""
+remont_bot_5.py — Telegram бот учёта ТО и ремонтов
+Автоматически записывает данные в Google Sheets
+
+ТОЧНАЯ КАРТА КОЛОНОК (из реального файла реестра):
+─────────────────────────────────────────────────────────
+Строки 1–9  = шапка документа (НЕ ТРОГАЕМ)
+Строка 10+  = данные (бот добавляет новые строки сюда)
+
+A  = Дата выполнения                  ← из бота: дата (auto)
+B  = Вид обслуживания (ТО, Р)         ← из бота: work_type
+C  = Наименование/содержание работ    ← из бота: description (краткое)
+D  = Исполнитель подрядчик            ← всегда "Подрядчик"
+E  = Описание работ (подробно)        ← из бота: description (полное)
+F  = Текущий показатель счётчика      ← из бота: moto
+G  = Дата начала работ                ← из бота: дата (auto)
+H  = Дата конец работ                 ← из бота: дата (auto)
+I  = Продолжительность ремонта        ← всегда "1 день"
+J  = Тех. характеристики / замечания  ← пусто (заполняют вручную)
+K  = Запчасти план (P/N)              ← пусто (заполняют вручную)
+L  = Запчасти факт (P/N)              ← пусто (заполняют вручную)
+M  = Место нахождения на складе       ← пусто (заполняют вручную)
+N  = Место хранения запчастей         ← "Склад у подрядчика"
+O  = Примечания                       ← пусто
+P  = ФИО, подписавший исполнитель     ← из бота: fio
+Q  = ФИО подписавший заказчик         ← из бота: fio
+─────────────────────────────────────────────────────────
+"""
+
+# ══════════════════════════════════════════════════════════════════
+# ИМПОРТЫ
+# ══════════════════════════════════════════════════════════════════
+import os
+import json
+import logging
 from datetime import datetime
 
-# ============================================================
-#  НАСТРОЙКИ — ЗАПОЛНИ ЭТИ 2 СТРОКИ ПЕРЕД ЗАПУСКОМ
-# ============================================================
-BOT_TOKEN = "8862724348:AAGknp12i168p064YLPbOkHezuogXrdPqe4"
+import telebot
+from telebot import types
 
-# Telegram ID куда отправлять готовые записи (твой личный ID)
-NOTIFY_CHAT_ID = "7924916320"
-# ============================================================
+import gspread
+from google.oauth2.service_account import Credentials
 
-bot = telebot.TeleBot(BOT_TOKEN)
 
-# Список техники из таблицы
+# ══════════════════════════════════════════════════════════════════
+# ЛОГИРОВАНИЕ — сообщения видны в панели Railway → Logs
+# ══════════════════════════════════════════════════════════════════
+logging.basicConfig(
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+
+# ══════════════════════════════════════════════════════════════════
+# СЕКРЕТЫ — читаем из Railway Variables, не хардкодим в код
+# ══════════════════════════════════════════════════════════════════
+BOT_TOKEN               = os.environ.get("BOT_TOKEN")
+GOOGLE_SHEET_ID         = os.environ.get("GOOGLE_SHEET_ID")
+NOTIFY_CHAT_ID          = os.environ.get("NOTIFY_CHAT_ID")
+GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN не задан в переменных окружения")
+if not GOOGLE_SHEET_ID:
+    raise ValueError("❌ GOOGLE_SHEET_ID не задан в переменных окружения")
+if not GOOGLE_CREDENTIALS_JSON:
+    raise ValueError("❌ GOOGLE_CREDENTIALS_JSON не задан в переменных окружения")
+
+
+# ══════════════════════════════════════════════════════════════════
+# СПИСОК ТЕХНИКИ
+# ══════════════════════════════════════════════════════════════════
 EQUIPMENT_LIST = [
     "Блендер BL380-X1",
     "№1 Насос 882AHDE",
@@ -50,24 +107,140 @@ EQUIPMENT_LIST = [
     "Тракторный прицеп УЗПТ",
 ]
 
-# Хранилище состояний пользователей (в памяти)
+
+# ══════════════════════════════════════════════════════════════════
+# GOOGLE SHEETS — ПОДКЛЮЧЕНИЕ И ЗАПИСЬ
+# ══════════════════════════════════════════════════════════════════
+
+def get_google_client():
+    """Создаёт авторизованное подключение к Google Sheets API."""
+    scopes = [
+        "https://www.googleapis.com/auth/spreadsheets",
+        "https://www.googleapis.com/auth/drive",
+    ]
+    creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
+    return gspread.authorize(creds)
+
+
+def find_sheet_for_equipment(spreadsheet, equipment_name: str):
+    """
+    Ищет нужный лист (вкладку) в таблице по имени техники.
+
+    Пример:
+      Техника = "№3 Насос 883AHDE"
+      Лист    = "...883AHDE..."  → совпадение найдено
+
+    Если совпадения нет — возвращает первый лист и пишет предупреждение.
+    """
+    all_sheets = spreadsheet.worksheets()
+    sheet_names = [s.title for s in all_sheets]
+    logger.info(f"Доступные листы: {sheet_names}")
+
+    # Разбиваем имя техники на слова и ищем каждое в названии листа
+    keywords = equipment_name.split()
+    for sheet in all_sheets:
+        title_lower = sheet.title.lower()
+        for kw in keywords:
+            # Ищем только значимые слова (длиннее 2 символов)
+            if len(kw) > 2 and kw.lower() in title_lower:
+                logger.info(f"✅ Лист найден: '{sheet.title}' (совпадение: '{kw}')")
+                return sheet
+
+    # Если ничего не нашли — первый лист как запасной
+    logger.warning(
+        f"⚠️ Лист для '{equipment_name}' не найден среди {sheet_names}. "
+        f"Используется первый лист: '{all_sheets[0].title}'"
+    )
+    return all_sheets[0]
+
+
+def write_to_google_sheets(data: dict) -> tuple:
+    """
+    Записывает одну строку данных в Google Sheets.
+
+    Строго соответствует структуре реестра:
+      Строки 1-9  = шапка (не трогаем)
+      Строка 10+  = данные (append_row добавляет в конец автоматически)
+
+    Возвращает (True, имя_листа) или (False, текст_ошибки)
+    """
+    try:
+        client = get_google_client()
+        spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+        sheet = find_sheet_for_equipment(spreadsheet, data["equipment"])
+
+        today = datetime.now().strftime("%d.%m.%Y")
+
+        # ──────────────────────────────────────────────────────────────
+        # ТОЧНАЯ КАРТА КОЛОНОК A→Q
+        # Порядок ДОЛЖЕН совпадать с колонками в таблице
+        # ──────────────────────────────────────────────────────────────
+        row = [
+            today,                        # A — Дата выполнения
+            data.get("work_type", ""),    # B — Вид обслуживания (ТО / Р)
+            data.get("description", ""), # C — Наименование/содержание работ
+            "Подрядчик",                  # D — Исполнитель
+            data.get("description", ""), # E — Описание работ (подробно)
+            data.get("moto", "НП"),       # F — Текущий показатель счётчика
+            today,                        # G — Дата начала
+            today,                        # H — Дата конец
+            "1 день",                     # I — Продолжительность
+            "",                           # J — Тех. хар. / замечания (вручную)
+            "",                           # K — Запчасти план P/N (вручную)
+            "",                           # L — Запчасти факт P/N (вручную)
+            "",                           # M — Место на складе (вручную)
+            "Склад у подрядчика",         # N — Место хранения запчастей
+            "",                           # O — Примечания
+            data.get("fio", ""),          # P — ФИО исполнитель
+            data.get("fio", ""),          # Q — ФИО заказчик
+        ]
+
+        # USER_ENTERED = Google сам распознаёт даты и числа как надо
+        sheet.append_row(row, value_input_option="USER_ENTERED")
+
+        logger.info(
+            f"✅ Записано в '{sheet.title}': "
+            f"дата={today}, вид={data.get('work_type')}, "
+            f"техника={data.get('equipment')}, мото={data.get('moto')}"
+        )
+        return True, sheet.title
+
+    except gspread.exceptions.SpreadsheetNotFound:
+        msg = "Таблица не найдена. Проверь GOOGLE_SHEET_ID."
+        logger.error(f"❌ {msg}")
+        return False, msg
+
+    except gspread.exceptions.APIError as e:
+        msg = f"Ошибка Google API: {e}"
+        logger.error(f"❌ {msg}")
+        return False, msg
+
+    except Exception as e:
+        msg = str(e)
+        logger.error(f"❌ Неожиданная ошибка при записи: {e}", exc_info=True)
+        return False, msg
+
+
+# ══════════════════════════════════════════════════════════════════
+# СОСТОЯНИЯ ПОЛЬЗОВАТЕЛЕЙ (в памяти)
+# ══════════════════════════════════════════════════════════════════
 user_data = {}
 
-# ─────────────────────────────────────────────
-#  ШАГИ: equipment → work_type → description → moto → fio → confirm
-# ─────────────────────────────────────────────
-
-def get_state(user_id):
-    return user_data.get(user_id, {})
-
-def set_state(user_id, data):
-    user_data[user_id] = data
-
-def clear_state(user_id):
-    user_data.pop(user_id, None)
+def get_state(user_id):   return user_data.get(user_id, {})
+def set_state(user_id, d): user_data[user_id] = d
+def clear_state(user_id): user_data.pop(user_id, None)
 
 
-# ── /start ──────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# СОЗДАНИЕ БОТА
+# ══════════════════════════════════════════════════════════════════
+bot = telebot.TeleBot(BOT_TOKEN)
+
+
+# ══════════════════════════════════════════════════════════════════
+# ШАГ 0: /start и /new — начало диалога
+# ══════════════════════════════════════════════════════════════════
 @bot.message_handler(commands=['start', 'new'])
 def cmd_start(message):
     clear_state(message.from_user.id)
@@ -84,43 +257,45 @@ def show_equipment_list(chat_id, user_id, edit_msg_id=None):
     text = "🔧 *Новая запись ТО/Ремонт*\n\nШаг 1 из 5 — Выберите технику:"
 
     if edit_msg_id:
-        bot.edit_message_text(text, chat_id, edit_msg_id, parse_mode='Markdown', reply_markup=markup)
+        bot.edit_message_text(text, chat_id, edit_msg_id,
+                              parse_mode='Markdown', reply_markup=markup)
     else:
         bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
 
 
-# ── Шаг 1: выбор техники ────────────────────
+# ══════════════════════════════════════════════════════════════════
+# ШАГ 1: Выбор техники
+# ══════════════════════════════════════════════════════════════════
 @bot.callback_query_handler(func=lambda c: c.data.startswith("eq:"))
 def cb_equipment(call):
     equipment = call.data[3:]
     state = get_state(call.from_user.id)
-    state['equipment'] = equipment
-    state['step'] = 'work_type'
+    state.update({'equipment': equipment, 'step': 'work_type'})
     set_state(call.from_user.id, state)
 
     markup = types.InlineKeyboardMarkup(row_width=1)
     markup.add(
-        types.InlineKeyboardButton("📋 Плановое ТО", callback_data="wt:Плановое ТО"),
-        types.InlineKeyboardButton("🔴 Внеплановый ремонт (Р)", callback_data="wt:Внеплановый ремонт (Р)"),
+        types.InlineKeyboardButton("📋 ТО — Плановое техобслуживание",
+                                   callback_data="wt:ТО"),
+        types.InlineKeyboardButton("🔴 Р — Внеплановый ремонт",
+                                   callback_data="wt:Р"),
         types.InlineKeyboardButton("⬅️ Назад", callback_data="back:equipment"),
     )
-
     bot.edit_message_text(
         f"✅ Техника: *{equipment}*\n\nШаг 2 из 5 — Вид обслуживания:",
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode='Markdown',
-        reply_markup=markup
+        call.message.chat.id, call.message.message_id,
+        parse_mode='Markdown', reply_markup=markup
     )
 
 
-# ── Шаг 2: вид работ ────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# ШАГ 2: Вид работ (ТО / Р)
+# ══════════════════════════════════════════════════════════════════
 @bot.callback_query_handler(func=lambda c: c.data.startswith("wt:"))
 def cb_work_type(call):
     work_type = call.data[3:]
     state = get_state(call.from_user.id)
-    state['work_type'] = work_type
-    state['step'] = 'description'
+    state.update({'work_type': work_type, 'step': 'description'})
     set_state(call.from_user.id, state)
 
     markup = types.InlineKeyboardMarkup()
@@ -130,36 +305,33 @@ def cb_work_type(call):
         f"✅ Техника: *{state['equipment']}*\n"
         f"✅ Вид: *{work_type}*\n\n"
         f"Шаг 3 из 5 — Опишите выполненные работы:\n"
-        f"_(Напишите текстом, например: Замена масляного фильтра, воздушного фильтра)_",
-        call.message.chat.id,
-        call.message.message_id,
-        parse_mode='Markdown',
-        reply_markup=markup
+        f"_(Например: Замена масляного фильтра, воздушного фильтра)_",
+        call.message.chat.id, call.message.message_id,
+        parse_mode='Markdown', reply_markup=markup
     )
     state['awaiting_msg_id'] = call.message.message_id
     set_state(call.from_user.id, state)
 
 
-# ── Шаг 3: описание работ ───────────────────
+# ══════════════════════════════════════════════════════════════════
+# ШАГ 3: Описание работ (текстовый ввод)
+# ══════════════════════════════════════════════════════════════════
 @bot.message_handler(func=lambda m: get_state(m.from_user.id).get('step') == 'description')
 def handle_description(message):
     state = get_state(message.from_user.id)
-    state['description'] = message.text
-    state['step'] = 'confirm_description'
+    state.update({'description': message.text, 'step': 'confirm_description'})
     set_state(message.from_user.id, state)
 
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("✅ Верно", callback_data="desc:ok"),
+        types.InlineKeyboardButton("✅ Верно",    callback_data="desc:ok"),
         types.InlineKeyboardButton("✏️ Изменить", callback_data="desc:edit"),
-        types.InlineKeyboardButton("⬅️ Назад", callback_data="back:description"),
+        types.InlineKeyboardButton("⬅️ Назад",    callback_data="back:description"),
     )
-
     bot.send_message(
         message.chat.id,
         f"Вы написали:\n\n_{message.text}_\n\nВсё верно?",
-        parse_mode='Markdown',
-        reply_markup=markup
+        parse_mode='Markdown', reply_markup=markup
     )
 
 
@@ -173,40 +345,36 @@ def cb_description_confirm(call):
         set_state(call.from_user.id, state)
         markup = types.InlineKeyboardMarkup()
         markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back:work_type"))
-        bot.edit_message_text(
-            "Введите описание работ заново:",
-            call.message.chat.id,
-            call.message.message_id,
-            reply_markup=markup
-        )
+        bot.edit_message_text("Введите описание работ заново:",
+                              call.message.chat.id, call.message.message_id,
+                              reply_markup=markup)
+
     elif action == 'ok':
         state['step'] = 'moto'
         set_state(call.from_user.id, state)
-
         markup = types.InlineKeyboardMarkup()
         markup.add(
             types.InlineKeyboardButton("НП (нет показаний)", callback_data="moto:НП"),
-            types.InlineKeyboardButton("⬅️ Назад", callback_data="back:description"),
+            types.InlineKeyboardButton("⬅️ Назад",           callback_data="back:description"),
         )
         bot.edit_message_text(
             f"✅ Техника: *{state['equipment']}*\n"
             f"✅ Вид: *{state['work_type']}*\n"
             f"✅ Работы: _{state['description']}_\n\n"
             f"Шаг 4 из 5 — Введите моточас / пробег:\n"
-            f"_(Напишите число или нажмите кнопку «НП»)_",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode='Markdown',
-            reply_markup=markup
+            f"_(Напишите число, например: 16 500 — или нажмите «НП»)_",
+            call.message.chat.id, call.message.message_id,
+            parse_mode='Markdown', reply_markup=markup
         )
 
 
-# ── Шаг 4: моточас / пробег ─────────────────
+# ══════════════════════════════════════════════════════════════════
+# ШАГ 4: Моточасы / пробег
+# ══════════════════════════════════════════════════════════════════
 @bot.callback_query_handler(func=lambda c: c.data.startswith("moto:"))
 def cb_moto_np(call):
     state = get_state(call.from_user.id)
-    state['moto'] = call.data[5:]
-    state['step'] = 'fio'
+    state.update({'moto': call.data[5:], 'step': 'fio'})
     set_state(call.from_user.id, state)
     ask_fio(call.message.chat.id, call.message.message_id, state)
 
@@ -214,8 +382,7 @@ def cb_moto_np(call):
 @bot.message_handler(func=lambda m: get_state(m.from_user.id).get('step') == 'moto')
 def handle_moto(message):
     state = get_state(message.from_user.id)
-    state['moto'] = message.text
-    state['step'] = 'fio'
+    state.update({'moto': message.text, 'step': 'fio'})
     set_state(message.from_user.id, state)
     ask_fio(message.chat.id, None, state)
 
@@ -223,165 +390,199 @@ def handle_moto(message):
 def ask_fio(chat_id, edit_msg_id, state):
     markup = types.InlineKeyboardMarkup()
     markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back:moto"))
-
     text = (
         f"✅ Техника: *{state['equipment']}*\n"
         f"✅ Вид: *{state['work_type']}*\n"
         f"✅ Работы: _{state['description']}_\n"
         f"✅ Моточас/Пробег: *{state['moto']}*\n\n"
         f"Шаг 5 из 5 — ФИО исполнителя:\n"
-        f"_(Напишите фамилию и инициалы)_"
+        f"_(Фамилия и инициалы, например: Иванов И.И.)_"
     )
-
     if edit_msg_id:
-        bot.edit_message_text(text, chat_id, edit_msg_id, parse_mode='Markdown', reply_markup=markup)
+        bot.edit_message_text(text, chat_id, edit_msg_id,
+                              parse_mode='Markdown', reply_markup=markup)
     else:
         bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
 
 
-# ── Шаг 5: ФИО ──────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# ШАГ 5: ФИО исполнителя
+# ══════════════════════════════════════════════════════════════════
 @bot.message_handler(func=lambda m: get_state(m.from_user.id).get('step') == 'fio')
 def handle_fio(message):
     state = get_state(message.from_user.id)
-    state['fio'] = message.text
-    state['step'] = 'final_confirm'
-    state['date'] = datetime.now().strftime('%d.%m.%Y')
+    state.update({
+        'fio':  message.text,
+        'date': datetime.now().strftime('%d.%m.%Y'),
+        'step': 'final_confirm',
+    })
     set_state(message.from_user.id, state)
     show_final_confirm(message.chat.id, state)
 
 
 def show_final_confirm(chat_id, state):
+    """Итоговая сводка перед отправкой — пользователь видит что запишется."""
     summary = (
         f"📋 *ИТОГОВАЯ ЗАПИСЬ*\n"
-        f"{'─'*30}\n"
-        f"📅 Дата: *{state['date']}*\n"
-        f"🔧 Техника: *{state['equipment']}*\n"
-        f"🔁 Вид работ: *{state['work_type']}*\n"
-        f"📝 Описание: _{state['description']}_\n"
+        f"{'─'*32}\n"
+        f"📅 Дата:           *{state['date']}*\n"
+        f"🔧 Техника:        *{state['equipment']}*\n"
+        f"🔁 Вид работ:      *{state['work_type']}*\n"
+        f"📝 Описание:       _{state['description']}_\n"
         f"⏱ Моточас/Пробег: *{state['moto']}*\n"
-        f"👷 Исполнитель: *{state['fio']}*\n"
-        f"{'─'*30}\n\n"
-        f"Всё верно? Отправить запись?"
+        f"👷 Исполнитель:    *{state['fio']}*\n"
+        f"{'─'*32}\n\n"
+        f"Нажми *✅ Отправить* — данные запишутся в таблицу."
     )
-
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
-        types.InlineKeyboardButton("✅ Отправить", callback_data="final:send"),
-        types.InlineKeyboardButton("⬅️ Назад (ФИО)", callback_data="back:fio"),
-        types.InlineKeyboardButton("🔄 Начать заново", callback_data="final:restart"),
+        types.InlineKeyboardButton("✅ Отправить в таблицу", callback_data="final:send"),
+        types.InlineKeyboardButton("⬅️ Исправить ФИО",       callback_data="back:fio"),
+        types.InlineKeyboardButton("🔄 Начать заново",        callback_data="final:restart"),
     )
-
     bot.send_message(chat_id, summary, parse_mode='Markdown', reply_markup=markup)
 
 
-# ── Финальное подтверждение ──────────────────
+# ══════════════════════════════════════════════════════════════════
+# ФИНАЛ: ОТПРАВКА В GOOGLE SHEETS
+# ══════════════════════════════════════════════════════════════════
 @bot.callback_query_handler(func=lambda c: c.data.startswith("final:"))
 def cb_final(call):
     action = call.data[6:]
-    state = get_state(call.from_user.id)
+    state  = get_state(call.from_user.id)
 
     if action == 'restart':
         clear_state(call.from_user.id)
-        show_equipment_list(call.message.chat.id, call.from_user.id, call.message.message_id)
+        show_equipment_list(call.message.chat.id, call.from_user.id,
+                            call.message.message_id)
+        return
 
-    elif action == 'send':
-        # Форматируем запись для таблицы
-        record = format_record_for_table(state)
+    if action == 'send':
+        # 1. Показываем "сохраняю..." пока идёт запрос к Google
+        bot.edit_message_text(
+            "⏳ Сохраняю запись в Google Sheets...",
+            call.message.chat.id, call.message.message_id
+        )
 
-        # Отправляем в нужный чат (ответственному человеку)
-        try:
-            bot.send_message(
-                NOTIFY_CHAT_ID,
-                f"📬 *Новая запись ТО/Ремонт*\n\n{record}",
+        # 2. ★ ЗАПИСЫВАЕМ В ТАБЛИЦУ ★
+        success, detail = write_to_google_sheets(state)
+
+        if success:
+            # 3а. Успех
+            bot.edit_message_text(
+                f"✅ *Запись добавлена в таблицу!*\n\n"
+                f"📊 Лист: _{detail}_\n"
+                f"📅 Дата: {state['date']}\n"
+                f"🔧 Техника: {state['equipment']}\n"
+                f"🔁 Вид: {state['work_type']}\n\n"
+                f"Нажми /new чтобы добавить ещё одну запись.",
+                call.message.chat.id, call.message.message_id,
                 parse_mode='Markdown'
             )
-            notify_sent = "✅ Запись отправлена ответственному лицу."
-        except Exception as e:
-            notify_sent = f"⚠️ Не удалось отправить уведомление: {e}"
 
-        bot.edit_message_text(
-            f"✅ *Запись сохранена!*\n\n{notify_sent}\n\n"
-            f"Нажми /new чтобы добавить ещё одну запись.",
-            call.message.chat.id,
-            call.message.message_id,
-            parse_mode='Markdown'
-        )
+            # 4. Уведомление в группу менеджера (если задан NOTIFY_CHAT_ID)
+            if NOTIFY_CHAT_ID:
+                try:
+                    bot.send_message(
+                        NOTIFY_CHAT_ID,
+                        f"📬 *Новая запись в реестре*\n\n"
+                        f"📅 {state['date']} | 🔧 {state['equipment']}\n"
+                        f"🔁 {state['work_type']} | ⏱ {state['moto']}\n"
+                        f"📝 {state['description']}\n"
+                        f"👷 {state['fio']}",
+                        parse_mode='Markdown'
+                    )
+                except Exception as e:
+                    logger.warning(f"Уведомление не отправлено: {e}")
+        else:
+            # 3б. Ошибка — показываем причину
+            bot.edit_message_text(
+                f"❌ *Ошибка при сохранении.*\n\n"
+                f"`{detail}`\n\n"
+                f"Попробуй ещё раз: /new\n"
+                f"Или сообщи администратору.",
+                call.message.chat.id, call.message.message_id,
+                parse_mode='Markdown'
+            )
+
         clear_state(call.from_user.id)
 
 
-def format_record_for_table(state):
-    """Форматирует данные в читаемый вид для вставки в таблицу"""
-    return (
-        f"```\n"
-        f"Дата:           {state['date']}\n"
-        f"Техника:        {state['equipment']}\n"
-        f"Вид работ:      {state['work_type']}\n"
-        f"Описание:       {state['description']}\n"
-        f"Моточас/Пробег: {state['moto']}\n"
-        f"Исполнитель:    {state['fio']}\n"
-        f"```"
-    )
-
-
-# ── Кнопки «Назад» ───────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# КНОПКИ «НАЗАД»
+# ══════════════════════════════════════════════════════════════════
 @bot.callback_query_handler(func=lambda c: c.data.startswith("back:"))
 def cb_back(call):
     target = call.data[5:]
-    user_id = call.from_user.id
-    state = get_state(user_id)
-    chat_id = call.message.chat.id
-    msg_id = call.message.message_id
+    uid    = call.from_user.id
+    state  = get_state(uid)
+    cid    = call.message.chat.id
+    mid    = call.message.message_id
 
-    if target == 'equipment':
-        show_equipment_list(chat_id, user_id, msg_id)
-
-    elif target == 'work_type':
-        # Вернуться к выбору техники
-        show_equipment_list(chat_id, user_id, msg_id)
+    if target in ('equipment', 'work_type'):
+        show_equipment_list(cid, uid, mid)
 
     elif target == 'description':
-        # Вернуться к выбору вида работ
         state['step'] = 'work_type'
-        set_state(user_id, state)
+        set_state(uid, state)
         markup = types.InlineKeyboardMarkup(row_width=1)
         markup.add(
-            types.InlineKeyboardButton("📋 Плановое ТО", callback_data="wt:Плановое ТО"),
-            types.InlineKeyboardButton("🔴 Внеплановый ремонт (Р)", callback_data="wt:Внеплановый ремонт (Р)"),
+            types.InlineKeyboardButton("📋 ТО — Плановое техобслуживание",
+                                       callback_data="wt:ТО"),
+            types.InlineKeyboardButton("🔴 Р — Внеплановый ремонт",
+                                       callback_data="wt:Р"),
             types.InlineKeyboardButton("⬅️ Назад", callback_data="back:equipment"),
         )
         bot.edit_message_text(
             f"✅ Техника: *{state['equipment']}*\n\nШаг 2 из 5 — Вид обслуживания:",
-            chat_id, msg_id, parse_mode='Markdown', reply_markup=markup
+            cid, mid, parse_mode='Markdown', reply_markup=markup
         )
 
     elif target == 'moto':
-        # Вернуться к описанию
         state['step'] = 'description'
-        set_state(user_id, state)
+        set_state(uid, state)
         markup = types.InlineKeyboardMarkup()
-        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back:work_type"))
+        markup.add(types.InlineKeyboardButton("⬅️ Назад",
+                                              callback_data="back:work_type"))
         bot.edit_message_text(
             f"✅ Техника: *{state['equipment']}*\n"
             f"✅ Вид: *{state['work_type']}*\n\n"
             f"Шаг 3 из 5 — Опишите выполненные работы (введите текст):",
-            chat_id, msg_id, parse_mode='Markdown', reply_markup=markup
+            cid, mid, parse_mode='Markdown', reply_markup=markup
         )
 
     elif target == 'fio':
-        # Вернуться к моточасу
         state['step'] = 'moto'
-        set_state(user_id, state)
+        set_state(uid, state)
         markup = types.InlineKeyboardMarkup()
         markup.add(
-            types.InlineKeyboardButton("НП (нет показаний)", callback_data="moto:НП"),
-            types.InlineKeyboardButton("⬅️ Назад", callback_data="back:description"),
+            types.InlineKeyboardButton("НП (нет показаний)",
+                                       callback_data="moto:НП"),
+            types.InlineKeyboardButton("⬅️ Назад",
+                                       callback_data="back:description"),
         )
         bot.edit_message_text(
-            f"Шаг 4 из 5 — Введите моточас / пробег:\n_(Напишите число или нажмите «НП»)_",
-            chat_id, msg_id, parse_mode='Markdown', reply_markup=markup
+            f"Шаг 4 из 5 — Введите моточас / пробег:\n"
+            f"_(Напишите число или нажмите «НП»)_",
+            cid, mid, parse_mode='Markdown', reply_markup=markup
         )
 
 
-# ── Запуск бота ─────────────────────────────
-print("✅ Бот запущен! Нажми Ctrl+C чтобы остановить.")
+# ══════════════════════════════════════════════════════════════════
+# ЗАПУСК
+# ══════════════════════════════════════════════════════════════════
+logger.info("🤖 Запускаю бота...")
+
+# Проверка подключения к Google Sheets при старте
+try:
+    _client = get_google_client()
+    _ss     = _client.open_by_key(GOOGLE_SHEET_ID)
+    _tabs   = [s.title for s in _ss.worksheets()]
+    logger.info(f"✅ Google Sheets подключён. Таблица: '{_ss.title}'")
+    logger.info(f"   Листы: {_tabs}")
+except Exception as _e:
+    logger.error(f"❌ Нет подключения к Google Sheets: {_e}")
+    logger.error("   Проверь GOOGLE_CREDENTIALS_JSON и GOOGLE_SHEET_ID")
+
+logger.info("✅ Бот готов. Нажми Ctrl+C чтобы остановить.")
 bot.infinity_polling()
