@@ -673,16 +673,24 @@ def cb_final(call):
         success, detail = write_to_google_sheets(state)
 
         if success:
-            # 3а. Успех
+            # 3а. Успех — показываем результат с кнопкой новой записи
+            success_markup = types.InlineKeyboardMarkup()
+            success_markup.add(
+                types.InlineKeyboardButton(
+                    "📋 Добавить ещё одну запись",
+                    callback_data="start:new"
+                )
+            )
             bot.edit_message_text(
                 f"✅ *Запись добавлена в таблицу!*\n\n"
                 f"📊 Лист: _{detail}_\n"
                 f"📅 Дата: {state['date']}\n"
                 f"🔧 Техника: {state['equipment']}\n"
                 f"🔁 Вид: {state['work_type']}\n\n"
-                f"Нажми /new чтобы добавить ещё одну запись.",
+                f"Нажмите кнопку ниже чтобы добавить ещё одну запись.",
                 call.message.chat.id, call.message.message_id,
-                parse_mode='Markdown'
+                parse_mode='Markdown',
+                reply_markup=success_markup
             )
 
             # 4. Уведомление в группу менеджера (если задан NOTIFY_CHAT_ID)
@@ -700,14 +708,21 @@ def cb_final(call):
                 except Exception as e:
                     logger.warning(f"Уведомление не отправлено: {e}")
         else:
-            # 3б. Ошибка — показываем причину
+            # 3б. Ошибка — показываем причину с кнопкой попробовать снова
+            error_markup = types.InlineKeyboardMarkup()
+            error_markup.add(
+                types.InlineKeyboardButton(
+                    "🔄 Попробовать снова",
+                    callback_data="start:new"
+                )
+            )
             bot.edit_message_text(
                 f"❌ *Ошибка при сохранении.*\n\n"
                 f"`{detail}`\n\n"
-                f"Попробуй ещё раз: /new\n"
-                f"Или сообщи администратору.",
+                f"Нажмите кнопку ниже чтобы попробовать снова.",
                 call.message.chat.id, call.message.message_id,
-                parse_mode='Markdown'
+                parse_mode='Markdown',
+                reply_markup=error_markup
             )
 
         clear_state(call.from_user.id)
