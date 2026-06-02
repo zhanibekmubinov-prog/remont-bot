@@ -127,27 +127,54 @@ def find_sheet_for_equipment(spreadsheet, equipment_name: str):
     """
     Ищет нужный лист (вкладку) в таблице по имени техники.
 
-    Пример:
-      Техника = "№3 Насос 883AHDE"
-      Лист    = "...883AHDE..."  → совпадение найдено
+    Логика поиска (3 уровня, от точного к приблизительному):
 
-    Если совпадения нет — возвращает первый лист и пишет предупреждение.
+    1. ТОЧНОЕ совпадение — название листа == название техники
+       "№3 Насос 883AHDE" == "№3 Насос 883AHDE" ✅
+
+    2. УНИКАЛЬНЫЙ КОД — последнее слово имени техники (самое уникальное)
+       "№2 Насос 12ABN" → ищем "12ABN" в названии листа
+       Это решает проблему когда несколько техник содержат слово "Насос"
+
+    3. ЗАПАСНОЙ — первый лист если ничего не нашли
     """
     all_sheets = spreadsheet.worksheets()
     sheet_names = [s.title for s in all_sheets]
     logger.info(f"Доступные листы: {sheet_names}")
 
-    # Разбиваем имя техники на слова и ищем каждое в названии листа
-    keywords = equipment_name.split()
+    # ── Уровень 1: точное совпадение ──────────────────────────────────────
     for sheet in all_sheets:
-        title_lower = sheet.title.lower()
-        for kw in keywords:
-            # Ищем только значимые слова (длиннее 2 символов)
-            if len(kw) > 2 and kw.lower() in title_lower:
-                logger.info(f"✅ Лист найден: '{sheet.title}' (совпадение: '{kw}')")
+        if sheet.title.strip() == equipment_name.strip():
+            logger.info(f"✅ Точное совпадение: '{sheet.title}'")
+            return sheet
+
+    # ── Уровень 2: поиск по уникальному коду (последнее слово) ────────────
+    # Например "№2 Насос 12ABN" → уникальный код = "12ABN"
+    # Это самое специфичное слово в имени техники
+    words = equipment_name.split()
+    # Берём последнее слово — оно обычно самое уникальное (код модели)
+    unique_code = words[-1] if words else ""
+
+    if unique_code and len(unique_code) > 2:
+        for sheet in all_sheets:
+            if unique_code.lower() in sheet.title.lower():
+                logger.info(
+                    f"✅ Совпадение по уникальному коду '{unique_code}': '{sheet.title}'"
+                )
                 return sheet
 
-    # Если ничего не нашли — первый лист как запасной
+    # Также пробуем предпоследнее слово если последнее не дало результата
+    if len(words) >= 2:
+        second_code = words[-2]
+        if len(second_code) > 2:
+            for sheet in all_sheets:
+                if second_code.lower() in sheet.title.lower():
+                    logger.info(
+                        f"✅ Совпадение по коду '{second_code}': '{sheet.title}'"
+                    )
+                    return sheet
+
+    # ── Уровень 3: запасной вариант ────────────────────────────────────────
     logger.warning(
         f"⚠️ Лист для '{equipment_name}' не найден среди {sheet_names}. "
         f"Используется первый лист: '{all_sheets[0].title}'"
