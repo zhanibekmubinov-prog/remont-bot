@@ -577,137 +577,6 @@ def ask_claude(question, spreadsheet_data):
 
 # ── Q&A Bot Handlers ─────────────────────────────────────────────
 
-@bot.message_handler(commands=['ask'])
-def cmd_ask(message):
-    """Handle /ask command."""
-    handle_qa_button(message)
-
-
-@bot.message_handler(func=lambda m: m.text == "🔍 Задать вопрос")
-def handle_qa_button(message):
-    """User pressed the Q&A button."""
-    qa_mode_users.add(message.from_user.id)
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("❌ Отменить", callback_data="qa:cancel"))
-    bot.send_message(
-        message.chat.id,
-        "🤖 *Режим вопросов и ответов*\n\n"
-        "Задайте любой вопрос об оборудовании на русском или английском.\n\n"
-        "Например:\n"
-        "• _Когда последний раз чинили насос 883?_\n"
-        "• _Какое состояние Mercedes 032YO?_\n"
-        "• _Кто обслуживал SHACMAN 650ADK?_\n"
-        "• _When was the last service on pump 3?_\n\n"
-        "Напишите ваш вопрос:",
-        parse_mode='Markdown',
-        reply_markup=markup
-    )
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "qa:cancel")
-def cb_qa_cancel(call):
-    """User cancelled Q&A mode."""
-    qa_mode_users.discard(call.from_user.id)
-    bot.edit_message_text(
-        "❌ Режим вопросов отменён.",
-        call.message.chat.id,
-        call.message.message_id
-    )
-
-
-@bot.message_handler(func=lambda m: m.from_user.id in qa_mode_users)
-def handle_qa_question(message):
-    """
-    This handles any text message from a user who is in Q&A mode.
-    1. Detects which equipment they are asking about
-    2. Reads relevant data from Google Sheets
-    3. Asks Claude AI to answer the question
-    4. Sends the answer back
-    """
-    user_id = message.from_user.id
-    question = message.text
-
-    # Show typing indicator
-    bot.send_chat_action(message.chat.id, 'typing')
-
-    # Send "searching..." message
-    searching_msg = bot.send_message(
-        message.chat.id,
-        "🔍 Ищу информацию в реестре...",
-    )
-
-    try:
-        # Step 1: Detect which equipment the question is about
-        equipment_hint = detect_equipment_in_question(question)
-        logger.info(f"QA question: '{question}' | Equipment hint: {equipment_hint}")
-
-        # Step 2: Read relevant data from Google Sheets
-        bot.edit_message_text(
-            "📊 Читаю данные из таблицы...",
-            message.chat.id,
-            searching_msg.message_id
-        )
-        sheet_data = get_all_sheet_data(equipment_hint)
-
-        # Step 3: Ask Claude AI
-        bot.edit_message_text(
-            "🤖 AI анализирует данные...",
-            message.chat.id,
-            searching_msg.message_id
-        )
-        answer = ask_claude(question, sheet_data)
-
-        # Step 4: Send the answer with buttons
-        answer_markup = types.InlineKeyboardMarkup(row_width=2)
-        answer_markup.add(
-            types.InlineKeyboardButton(
-                "🔍 Задать ещё вопрос", callback_data="qa:another"
-            ),
-            types.InlineKeyboardButton(
-                "📋 Новая запись", callback_data="start:new"
-            )
-        )
-
-        # Delete the "searching" message
-        bot.delete_message(message.chat.id, searching_msg.message_id)
-
-        # Send the answer
-        bot.send_message(
-            message.chat.id,
-            f"🤖 *Ответ:*\n\n{answer}",
-            parse_mode='Markdown',
-            reply_markup=answer_markup
-        )
-
-    except Exception as e:
-        logger.error(f"QA error: {e}", exc_info=True)
-        bot.edit_message_text(
-            f"❌ Произошла ошибка: {e}\n\nПопробуйте ещё раз.",
-            message.chat.id,
-            searching_msg.message_id
-        )
-
-    finally:
-        # Remove user from QA mode after answering
-        qa_mode_users.discard(user_id)
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "qa:another")
-def cb_qa_another(call):
-    """User wants to ask another question."""
-    qa_mode_users.add(call.from_user.id)
-    markup = types.InlineKeyboardMarkup()
-    markup.add(types.InlineKeyboardButton("❌ Отменить", callback_data="qa:cancel"))
-    bot.edit_message_text(
-        "🤖 Задайте следующий вопрос:",
-        call.message.chat.id,
-        call.message.message_id,
-        reply_markup=markup
-    )
-
-# ══════════════════════════════════════════════════════════════════
-# СОЗДАНИЕ БОТА
-# ══════════════════════════════════════════════════════════════════
 bot = telebot.TeleBot(BOT_TOKEN)
 
 
@@ -861,6 +730,137 @@ def cmd_cancel(message):
     )
 
 
+@bot.message_handler(commands=['ask'])
+def cmd_ask(message):
+    """Handle /ask command."""
+    handle_qa_button(message)
+
+
+@bot.message_handler(func=lambda m: m.text == "🔍 Задать вопрос")
+def handle_qa_button(message):
+    """User pressed the Q&A button."""
+    qa_mode_users.add(message.from_user.id)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Отменить", callback_data="qa:cancel"))
+    bot.send_message(
+        message.chat.id,
+        "🤖 *Режим вопросов и ответов*\n\n"
+        "Задайте любой вопрос об оборудовании на русском или английском.\n\n"
+        "Например:\n"
+        "• _Когда последний раз чинили насос 883?_\n"
+        "• _Какое состояние Mercedes 032YO?_\n"
+        "• _Кто обслуживал SHACMAN 650ADK?_\n"
+        "• _When was the last service on pump 3?_\n\n"
+        "Напишите ваш вопрос:",
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "qa:cancel")
+def cb_qa_cancel(call):
+    """User cancelled Q&A mode."""
+    qa_mode_users.discard(call.from_user.id)
+    bot.edit_message_text(
+        "❌ Режим вопросов отменён.",
+        call.message.chat.id,
+        call.message.message_id
+    )
+
+
+@bot.message_handler(func=lambda m: m.from_user.id in qa_mode_users)
+def handle_qa_question(message):
+    """
+    This handles any text message from a user who is in Q&A mode.
+    1. Detects which equipment they are asking about
+    2. Reads relevant data from Google Sheets
+    3. Asks Claude AI to answer the question
+    4. Sends the answer back
+    """
+    user_id = message.from_user.id
+    question = message.text
+
+    # Show typing indicator
+    bot.send_chat_action(message.chat.id, 'typing')
+
+    # Send "searching..." message
+    searching_msg = bot.send_message(
+        message.chat.id,
+        "🔍 Ищу информацию в реестре...",
+    )
+
+    try:
+        # Step 1: Detect which equipment the question is about
+        equipment_hint = detect_equipment_in_question(question)
+        logger.info(f"QA question: '{question}' | Equipment hint: {equipment_hint}")
+
+        # Step 2: Read relevant data from Google Sheets
+        bot.edit_message_text(
+            "📊 Читаю данные из таблицы...",
+            message.chat.id,
+            searching_msg.message_id
+        )
+        sheet_data = get_all_sheet_data(equipment_hint)
+
+        # Step 3: Ask Claude AI
+        bot.edit_message_text(
+            "🤖 AI анализирует данные...",
+            message.chat.id,
+            searching_msg.message_id
+        )
+        answer = ask_claude(question, sheet_data)
+
+        # Step 4: Send the answer with buttons
+        answer_markup = types.InlineKeyboardMarkup(row_width=2)
+        answer_markup.add(
+            types.InlineKeyboardButton(
+                "🔍 Задать ещё вопрос", callback_data="qa:another"
+            ),
+            types.InlineKeyboardButton(
+                "📋 Новая запись", callback_data="start:new"
+            )
+        )
+
+        # Delete the "searching" message
+        bot.delete_message(message.chat.id, searching_msg.message_id)
+
+        # Send the answer
+        bot.send_message(
+            message.chat.id,
+            f"🤖 *Ответ:*\n\n{answer}",
+            parse_mode='Markdown',
+            reply_markup=answer_markup
+        )
+
+    except Exception as e:
+        logger.error(f"QA error: {e}", exc_info=True)
+        bot.edit_message_text(
+            f"❌ Произошла ошибка: {e}\n\nПопробуйте ещё раз.",
+            message.chat.id,
+            searching_msg.message_id
+        )
+
+    finally:
+        # Remove user from QA mode after answering
+        qa_mode_users.discard(user_id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "qa:another")
+def cb_qa_another(call):
+    """User wants to ask another question."""
+    qa_mode_users.add(call.from_user.id)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Отменить", callback_data="qa:cancel"))
+    bot.edit_message_text(
+        "🤖 Задайте следующий вопрос:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
+# ══════════════════════════════════════════════════════════════════
+# СОЗДАНИЕ БОТА
+# ══════════════════════════════════════════════════════════════════
 def show_equipment_list(chat_id, user_id, edit_msg_id=None):
     set_state(user_id, {'step': 'equipment'})
 
