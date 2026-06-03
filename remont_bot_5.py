@@ -33,6 +33,7 @@ Q  = ФИО подписавший заказчик         ← из бота: f
 import os
 import json
 import logging
+import requests
 from datetime import datetime
 
 import telebot
@@ -59,6 +60,7 @@ BOT_TOKEN               = os.environ.get("BOT_TOKEN")
 GOOGLE_SHEET_ID         = os.environ.get("GOOGLE_SHEET_ID")
 NOTIFY_CHAT_ID          = os.environ.get("NOTIFY_CHAT_ID")
 GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
+ANTHROPIC_API_KEY       = os.environ.get("ANTHROPIC_API_KEY")
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не задан в переменных окружения")
@@ -301,6 +303,408 @@ def set_state(user_id, d): user_data[user_id] = d
 def clear_state(user_id): user_data.pop(user_id, None)
 
 
+
+# ══════════════════════════════════════════════════════════════════
+# Q&A FEATURE — AI-POWERED SPREADSHEET ASSISTANT
+# ══════════════════════════════════════════════════════════════════
+
+# Track which users are in Q&A mode
+qa_mode_users = set()
+
+
+def get_all_sheet_data(equipment_hint=None):
+    """
+    Reads data from Google Sheets.
+    If equipment_hint is provided, reads just that tab.
+    Otherwise reads all tabs (for broad questions).
+    Returns a formatted string of the data.
+    """
+    try:
+        client = get_google_client()
+        spreadsheet = client.open_by_key(GOOGLE_SHEET_ID)
+        all_sheets = spreadsheet.worksheets()
+
+        # Skip non-equipment sheets
+        skip_sheets = ['sheet1', 'пустая форма']
+        equipment_sheets = [
+            s for s in all_sheets
+            if s.title.lower() not in skip_sheets
+        ]
+
+        # If user mentioned specific equipment, find that tab
+        if equipment_hint:
+            hint_lower = equipment_hint.lower()
+            for sheet in equipment_sheets:
+                if hint_lower in sheet.title.lower():
+                    return read_single_sheet(sheet)
+            # Try word by word
+            for word in equipment_hint.split():
+                if len(word) > 2:
+                    for sheet in equipment_sheets:
+                        if word.lower() in sheet.title.lower():
+                            return read_single_sheet(sheet)
+
+        # No specific equipment — read last 5 entries from each sheet
+        # (to avoid sending too much data to AI)
+        all_data = []
+        for sheet in equipment_sheets[:10]:  # limit to 10 sheets max
+            try:
+                rows = sheet.get_all_values()
+                # Data starts at row 10 (index 9), get last 3 entries
+                data_rows = [r for r in rows[9:] if any(v.strip() for v in r)]
+                if data_rows:
+                    last_rows = data_rows[-3:]
+                    all_data.append(f"\n=== {sheet.title} ===")
+                    for row in last_rows:
+                        # Format: date | work_type | description | moto | fio
+                        date = row[0] if len(row) > 0 else ""
+                        wtype = row[1] if len(row) > 1 else ""
+                        desc = row[4] if len(row) > 4 else ""
+                        moto = row[5] if len(row) > 5 else ""
+                        fio = row[15] if len(row) > 15 else ""
+                        status = row[13] if len(row) > 13 else ""
+                        all_data.append(
+                            f"  Дата: {date} | Вид: {wtype} | "
+                            f"Работы: {desc} | Мото: {moto} | "
+                            f"Исполнитель: {fio} | Состояние: {status}"
+                        )
+            except Exception:
+                continue
+
+        return "\n".join(all_data) if all_data else "Данные не найдены"
+
+    except Exception as e:
+        logger.error(f"Error reading sheet for QA: {e}")
+        return f"Ошибка чтения таблицы: {e}"
+
+
+def read_single_sheet(sheet):
+    """Read all data rows from one sheet tab."""
+    try:
+        rows = sheet.get_all_values()
+        # Data starts at row 10 (index 9)
+        data_rows = [r for r in rows[9:] if any(v.strip() for v in r)]
+
+        if not data_rows:
+            return f"В листе {sheet.title} нет записей."
+
+        formatted = [f"=== {sheet.title} (все записи) ==="]
+        for i, row in enumerate(data_rows, 1):
+            date  = row[0]  if len(row) > 0  else ""
+            wtype = row[1]  if len(row) > 1  else ""
+            basis = row[2]  if len(row) > 2  else ""
+            cond  = row[3]  if len(row) > 3  else ""
+            desc  = row[4]  if len(row) > 4  else ""
+            moto  = row[5]  if len(row) > 5  else ""
+            dstart= row[6]  if len(row) > 6  else ""
+            dend  = row[7]  if len(row) > 7  else ""
+            dur   = row[8]  if len(row) > 8  else ""
+            parts_old = row[10] if len(row) > 10 else ""
+            parts_new = row[11] if len(row) > 11 else ""
+            status = row[13] if len(row) > 13 else ""
+            fio   = row[15] if len(row) > 15 else ""
+            fio2  = row[16] if len(row) > 16 else ""
+
+            formatted.append(
+                f"Запись {i}: Дата={date} | Вид={wtype} | "
+                f"Основание={basis} | Состояние до={cond} | "
+                f"Описание={desc} | Моточасы={moto} | "
+                f"Начало={dstart} | Конец={dend} | Длит={dur} | "
+                f"Запчасти план={parts_old} | Запчасти факт={parts_new} | "
+                f"Состояние после={status} | Исполнитель={fio} | "
+                f"Контролирующий={fio2}"
+            )
+        return "\n".join(formatted)
+    except Exception as e:
+        return f"Ошибка чтения листа {sheet.title}: {e}"
+
+
+def detect_equipment_in_question(question):
+    """
+    Try to detect which equipment the user is asking about.
+    Returns a search hint or None if the question is general.
+    """
+    question_lower = question.lower()
+
+    # Map of common keywords/shorthand to equipment identifiers
+    keywords = {
+        "блендер": "Блендер",
+        "blender": "Блендер",
+        "насос 1": "882AHDE",
+        "насос1": "882AHDE",
+        "pump 1": "882AHDE",
+        "882": "882AHDE",
+        "насос 2": "12ABN",
+        "насос2": "12ABN",
+        "12abn": "12ABN",
+        "насос 3": "883AHDE",
+        "насос3": "883AHDE",
+        "883": "883AHDE",
+        "pump 3": "883AHDE",
+        "насос 4": "876AHDE",
+        "876": "876AHDE",
+        "насос 4": "876AHDE",
+        "насос 5": "877AHDE",
+        "877": "877AHDE",
+        "насос 6": "11ADJ06",
+        "11adj": "11ADJ06",
+        "насос 7": "MTU",
+        "mtu": "MTU",
+        "гидро": "861AHDE",
+        "гидрационка": "861AHDE",
+        "гидроционка": "861AHDE",
+        "032": "032YO",
+        "мерс 032": "032YO",
+        "043": "043YO",
+        "мерс 043": "043YO",
+        "016": "016YO",
+        "мерс 016": "016YO",
+        "017": "017YO",
+        "мерс 017": "017YO",
+        "040": "040YO",
+        "045": "045YO",
+        "046": "046YO",
+        "урал пца": "162BG",
+        "162": "162BG",
+        "dongfeng": "DongFeng",
+        "донгфенг": "DongFeng",
+        "062": "062BG",
+        "маз": "МАЗ",
+        "maz": "МАЗ",
+        "030": "030YO",
+        "650adk": "650ADK",
+        "шакман 650": "650ADK",
+        "shacman 650": "650ADK",
+        "019aes": "019AES",
+        "шакман 019": "019AES",
+        "307": "307ВН06",
+        "301": "301ВН06",
+        "урал 199": "199ADQ06",
+        "199adq": "199ADQ06",
+        "водогрей": "Водогрейная",
+        "водогрейная": "Водогрейная",
+        "ацн 15": "15CYA06",
+        "15cya": "15CYA06",
+        "ацн 16": "16CYA06",
+        "16cya": "16CYA06",
+        "ацн 05": "05ADF06",
+        "05adf": "05ADF06",
+        "трал 59": "59ADV06",
+        "59adv": "59ADV06",
+        "трал 28": "28ABY06",
+        "28aby": "28ABY06",
+        "полуприцеп 91": "91ACS06",
+        "91acs": "91ACS06",
+        "полуприцеп 25": "25ACR06",
+        "25acr": "25ACR06",
+        "тракторный": "УЗПТ",
+        "узпт": "УЗПТ",
+    }
+
+    for keyword, hint in keywords.items():
+        if keyword in question_lower:
+            return hint
+
+    return None
+
+
+def ask_claude(question, spreadsheet_data):
+    """
+    Sends the user question + spreadsheet data to Claude AI.
+    Returns Claude's answer as a string.
+    """
+    if not ANTHROPIC_API_KEY:
+        return (
+            "❌ AI не настроен. "
+            "Добавьте ANTHROPIC_API_KEY в переменные окружения Railway."
+        )
+
+    system_prompt = """Ты — помощник по техническому обслуживанию оборудования компании ТОО «Caspian Integrated Services».
+
+У тебя есть доступ к реестру технического обслуживания и ремонтных работ компании.
+Твоя задача — отвечать на вопросы сотрудников о состоянии оборудования, истории обслуживания и ремонтов.
+
+ПРАВИЛА:
+1. Отвечай ТОЛЬКО на основе предоставленных данных из реестра. Не придумывай ничего.
+2. Если данных нет — честно скажи что информация не найдена.
+3. Отвечай на том же языке на котором задан вопрос (русский или английский).
+4. Будь конкретным — называй даты, имена, типы работ из реальных данных.
+5. Если вопрос непонятен — попроси уточнить.
+6. Форматируй ответ кратко и понятно для работника на телефоне.
+7. Понимай сокращения: ТО = техническое обслуживание, Р = ремонт, НП = нет показаний.
+8. Понимай неточные названия: "насос 3" = "№3 Насос 883AHDE", "мерс 032" = "Mercedes Actros 032YO" и т.д."""
+
+    user_message = f"""Данные из реестра технического обслуживания:
+
+{spreadsheet_data}
+
+Вопрос сотрудника: {question}
+
+Ответь на вопрос на основе данных выше."""
+
+    try:
+        response = requests.post(
+            "https://api.anthropic.com/v1/messages",
+            headers={
+                "x-api-key": ANTHROPIC_API_KEY,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json",
+            },
+            json={
+                "model": "claude-haiku-4-5-20251001",
+                "max_tokens": 1024,
+                "system": system_prompt,
+                "messages": [
+                    {"role": "user", "content": user_message}
+                ],
+            },
+            timeout=30,
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            return data["content"][0]["text"]
+        else:
+            logger.error(f"Anthropic API error: {response.status_code} {response.text}")
+            return f"❌ Ошибка AI ({response.status_code}). Попробуйте позже."
+
+    except requests.Timeout:
+        return "❌ AI не ответил вовремя. Попробуйте снова."
+    except Exception as e:
+        logger.error(f"Error calling Claude API: {e}")
+        return f"❌ Ошибка: {e}"
+
+
+# ── Q&A Bot Handlers ─────────────────────────────────────────────
+
+@bot.message_handler(commands=['ask'])
+def cmd_ask(message):
+    """Handle /ask command."""
+    handle_qa_button(message)
+
+
+@bot.message_handler(func=lambda m: m.text == "🔍 Задать вопрос")
+def handle_qa_button(message):
+    """User pressed the Q&A button."""
+    qa_mode_users.add(message.from_user.id)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Отменить", callback_data="qa:cancel"))
+    bot.send_message(
+        message.chat.id,
+        "🤖 *Режим вопросов и ответов*\n\n"
+        "Задайте любой вопрос об оборудовании на русском или английском.\n\n"
+        "Например:\n"
+        "• _Когда последний раз чинили насос 883?_\n"
+        "• _Какое состояние Mercedes 032YO?_\n"
+        "• _Кто обслуживал SHACMAN 650ADK?_\n"
+        "• _When was the last service on pump 3?_\n\n"
+        "Напишите ваш вопрос:",
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "qa:cancel")
+def cb_qa_cancel(call):
+    """User cancelled Q&A mode."""
+    qa_mode_users.discard(call.from_user.id)
+    bot.edit_message_text(
+        "❌ Режим вопросов отменён.",
+        call.message.chat.id,
+        call.message.message_id
+    )
+
+
+@bot.message_handler(func=lambda m: m.from_user.id in qa_mode_users)
+def handle_qa_question(message):
+    """
+    This handles any text message from a user who is in Q&A mode.
+    1. Detects which equipment they are asking about
+    2. Reads relevant data from Google Sheets
+    3. Asks Claude AI to answer the question
+    4. Sends the answer back
+    """
+    user_id = message.from_user.id
+    question = message.text
+
+    # Show typing indicator
+    bot.send_chat_action(message.chat.id, 'typing')
+
+    # Send "searching..." message
+    searching_msg = bot.send_message(
+        message.chat.id,
+        "🔍 Ищу информацию в реестре...",
+    )
+
+    try:
+        # Step 1: Detect which equipment the question is about
+        equipment_hint = detect_equipment_in_question(question)
+        logger.info(f"QA question: '{question}' | Equipment hint: {equipment_hint}")
+
+        # Step 2: Read relevant data from Google Sheets
+        bot.edit_message_text(
+            "📊 Читаю данные из таблицы...",
+            message.chat.id,
+            searching_msg.message_id
+        )
+        sheet_data = get_all_sheet_data(equipment_hint)
+
+        # Step 3: Ask Claude AI
+        bot.edit_message_text(
+            "🤖 AI анализирует данные...",
+            message.chat.id,
+            searching_msg.message_id
+        )
+        answer = ask_claude(question, sheet_data)
+
+        # Step 4: Send the answer with buttons
+        answer_markup = types.InlineKeyboardMarkup(row_width=2)
+        answer_markup.add(
+            types.InlineKeyboardButton(
+                "🔍 Задать ещё вопрос", callback_data="qa:another"
+            ),
+            types.InlineKeyboardButton(
+                "📋 Новая запись", callback_data="start:new"
+            )
+        )
+
+        # Delete the "searching" message
+        bot.delete_message(message.chat.id, searching_msg.message_id)
+
+        # Send the answer
+        bot.send_message(
+            message.chat.id,
+            f"🤖 *Ответ:*\n\n{answer}",
+            parse_mode='Markdown',
+            reply_markup=answer_markup
+        )
+
+    except Exception as e:
+        logger.error(f"QA error: {e}", exc_info=True)
+        bot.edit_message_text(
+            f"❌ Произошла ошибка: {e}\n\nПопробуйте ещё раз.",
+            message.chat.id,
+            searching_msg.message_id
+        )
+
+    finally:
+        # Remove user from QA mode after answering
+        qa_mode_users.discard(user_id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "qa:another")
+def cb_qa_another(call):
+    """User wants to ask another question."""
+    qa_mode_users.add(call.from_user.id)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Отменить", callback_data="qa:cancel"))
+    bot.edit_message_text(
+        "🤖 Задайте следующий вопрос:",
+        call.message.chat.id,
+        call.message.message_id,
+        reply_markup=markup
+    )
+
 # ══════════════════════════════════════════════════════════════════
 # СОЗДАНИЕ БОТА
 # ══════════════════════════════════════════════════════════════════
@@ -318,9 +722,10 @@ def setup_bot_commands():
     """
     try:
         commands = [
-            types.BotCommand("/new",   "📋 Новая запись ТО/Ремонт"),
-            types.BotCommand("/help",  "❓ Помощь"),
-            types.BotCommand("/cancel","❌ Отменить текущую запись"),
+            types.BotCommand("/new",    "📋 Новая запись ТО/Ремонт"),
+            types.BotCommand("/ask",    "🔍 Задать вопрос об оборудовании"),
+            types.BotCommand("/help",   "❓ Помощь"),
+            types.BotCommand("/cancel", "❌ Отменить текущую запись"),
         ]
         bot.set_my_commands(commands)
         logger.info("✅ Команды бота установлены")
@@ -337,7 +742,10 @@ def get_main_menu_keyboard():
         resize_keyboard=True,
         one_time_keyboard=False,
     )
-    markup.add(types.KeyboardButton("📋 Новая запись ТО/Ремонт"))
+    markup.row(
+        types.KeyboardButton("📋 Новая запись ТО/Ремонт"),
+        types.KeyboardButton("🔍 Задать вопрос")
+    )
     return markup
 
 
@@ -368,7 +776,8 @@ def cmd_start(message):
         "о проведённом техническом обслуживании или ремонте.\n\n"
         "Данные автоматически сохраняются в реестр компании.\n\n"
         "━━━━━━━━━━━━━━━━━━━━\n"
-        "Нажмите кнопку ниже чтобы начать:"
+        "📋 *Новая запись* — добавить ТО или ремонт\n"
+        "🔍 *Задать вопрос* — узнать историю обслуживания"
     )
 
     bot.send_message(
