@@ -629,12 +629,16 @@ def cmd_start(message):
     """
     clear_state(message.from_user.id)
 
-    # Inline button in the message
-    inline_markup = types.InlineKeyboardMarkup()
+    # Inline buttons in the message — both options clearly visible
+    inline_markup = types.InlineKeyboardMarkup(row_width=1)
     inline_markup.add(
         types.InlineKeyboardButton(
             "📋 Начать новую запись",
             callback_data="start:new"
+        ),
+        types.InlineKeyboardButton(
+            "🔍 Задать вопрос об оборудовании",
+            callback_data="start:ask"
         )
     )
 
@@ -657,17 +661,39 @@ def cmd_start(message):
     )
     bot.send_message(
         message.chat.id,
-        "⬇️",
+        "Выберите действие:",
         reply_markup=inline_markup,
     )
 
 
 @bot.callback_query_handler(func=lambda c: c.data == "start:new")
 def cb_start_new(call):
-    """User tapped the inline Start button."""
+    """User tapped the New Entry button."""
     clear_state(call.from_user.id)
     bot.delete_message(call.message.chat.id, call.message.message_id)
     show_equipment_list(call.message.chat.id, call.from_user.id)
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "start:ask")
+def cb_start_ask(call):
+    """User tapped the Ask Question button."""
+    bot.delete_message(call.message.chat.id, call.message.message_id)
+    # Reuse the QA button handler
+    qa_mode_users.add(call.from_user.id)
+    markup = types.InlineKeyboardMarkup()
+    markup.add(types.InlineKeyboardButton("❌ Отменить", callback_data="qa:cancel"))
+    bot.send_message(
+        call.message.chat.id,
+        "🤖 *Режим вопросов и ответов*\n\n"
+        "Задайте любой вопрос об оборудовании.\n\n"
+        "Например:\n"
+        "• _Когда последний раз чинили насос 883?_\n"
+        "• _Какое состояние Mercedes 032YO?_\n"
+        "• _Кто обслуживал SHACMAN 650?_\n\n"
+        "Напишите ваш вопрос:",
+        parse_mode='Markdown',
+        reply_markup=markup
+    )
 
 
 # ══════════════════════════════════════════════════════════════════
