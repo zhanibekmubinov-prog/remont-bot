@@ -253,8 +253,8 @@ def write_to_google_sheets(data: dict) -> tuple:
             today,                        # H — Дата конец
             "1 день",                     # I — Продолжительность
             "",                           # J — Тех. хар. (вручную)
-            "",                           # K — Запчасти план (вручную)
-            "",                           # L — Запчасти факт (вручную)
+            data.get('parts_old', 'НП'),   # K — Запчасти план P/N (снята)
+            data.get('parts_new', 'НП'),   # L — Запчасти факт P/N (установлена)
             "",                           # M — Место на складе (вручную)
             "Склад у подрядчика",         # N — Место хранения
             "",                           # O — Примечания (вручную)
@@ -1014,15 +1014,120 @@ def cb_description_confirm(call):
 @bot.callback_query_handler(func=lambda c: c.data.startswith("moto:"))
 def cb_moto_np(call):
     state = get_state(call.from_user.id)
-    state.update({'moto': call.data[5:], 'step': 'fio'})
+    state.update({'moto': call.data[5:], 'step': 'parts'})
     set_state(call.from_user.id, state)
-    ask_fio(call.message.chat.id, call.message.message_id, state)
+    ask_parts(call.message.chat.id, call.message.message_id, state)
 
 
 @bot.message_handler(func=lambda m: get_state(m.from_user.id).get('step') == 'moto')
 def handle_moto(message):
     state = get_state(message.from_user.id)
-    state.update({'moto': message.text, 'step': 'fio'})
+    state.update({'moto': message.text, 'step': 'parts'})
+    set_state(message.from_user.id, state)
+    ask_parts(message.chat.id, None, state)
+
+
+def ask_parts(chat_id, edit_msg_id, state):
+    """Ask about spare parts used — fills columns K and L in the sheet."""
+    markup = types.InlineKeyboardMarkup(row_width=1)
+    markup.add(
+        types.InlineKeyboardButton(
+            "НП — запчасти не использовались",
+            callback_data="parts:np"
+        ),
+        types.InlineKeyboardButton(
+            "✏️ Ввести P/N запчастей",
+            callback_data="parts:enter"
+        ),
+        types.InlineKeyboardButton("⬅️ Назад", callback_data="back:parts"),
+    )
+    text = (
+        f"✅ Техника: *{state['equipment']}*\n"
+        f"✅ Вид: *{state['work_type']}*\n"
+        f"✅ Работы: _{state['description']}_\n"
+        f"✅ Моточас/Пробег: *{state['moto']}*\n\n"
+        f"Шаг 5 из 6 — Запчасти / материалы:\n\n"
+        f"Были ли использованы запчасти или материалы?"
+    )
+    if edit_msg_id:
+        bot.edit_message_text(text, chat_id, edit_msg_id,
+                              parse_mode='Markdown', reply_markup=markup)
+    else:
+        bot.send_message(chat_id, text, parse_mode='Markdown', reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda c: c.data.startswith("parts:"))
+def cb_parts(call):
+    action = call.data[6:]
+    state = get_state(call.from_user.id)
+
+    if action == 'np':
+        # No parts used — write НП to both K and L
+        state.update({
+            'parts_old': 'НП',
+            'parts_new': 'НП',
+            'step': 'fio'
+        })
+        set_state(call.from_user.id, state)
+        ask_fio(call.message.chat.id, call.message.message_id, state)
+
+    elif action == 'enter':
+        # User wants to enter part numbers
+        state['step'] = 'parts_old'
+        set_state(call.from_user.id, state)
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton("⬅️ Назад", callback_data="back:parts"))
+        bot.edit_message_text(
+            f"🔧 *Запчасти — старая деталь (снята)*\n\n"
+            f"Введите P/N и серийный номер СНЯТОЙ детали.\n"
+            f"_(Например: FF256 LF17473)_\n\n"
+            f"Если номер неизвестен — напишите: `НП`",
+            call.message.chat.id, call.message.message_id,
+            parse_mode='Markdown', reply_markup=markup
+        )
+
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id).get('step') == 'parts_old')
+def handle_parts_old(message):
+    """User entered the old/removed part number."""
+    state = get_state(message.from_user.id)
+    state.update({'parts_old': message.text, 'step': 'parts_new'})
+    set_state(message.from_user.id, state)
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton(
+            "Такой же номер (как старая)", callback_data="parts_new:same"
+        ),
+        types.InlineKeyboardButton("⬅️ Назад", callback_data="back:parts_old"),
+    )
+    bot.send_message(
+        message.chat.id,
+        f"✅ Старая деталь: *{message.text}*\n\n"
+        f"🔧 *Запчасти — новая деталь (установлена)*\n\n"
+        f"Введите P/N и серийный номер НОВОЙ установленной детали.\n"
+        f"_(Или нажмите кнопку если номер такой же)_",
+        parse_mode='Markdown', reply_markup=markup
+    )
+
+
+@bot.callback_query_handler(func=lambda c: c.data == "parts_new:same")
+def cb_parts_new_same(call):
+    """New part has same number as old part."""
+    state = get_state(call.from_user.id)
+    state.update({
+        'parts_new': state.get('parts_old', 'НП'),
+        'step': 'fio'
+    })
+    set_state(call.from_user.id, state)
+    ask_fio(call.message.chat.id, call.message.message_id, state)
+
+
+@bot.message_handler(func=lambda m: get_state(m.from_user.id).get('step') == 'parts_new')
+def handle_parts_new(message):
+    """User entered the new/installed part number."""
+    state = get_state(message.from_user.id)
+    state.update({'parts_new': message.text, 'step': 'fio'})
     set_state(message.from_user.id, state)
     ask_fio(message.chat.id, None, state)
 
@@ -1035,7 +1140,7 @@ def ask_fio(chat_id, edit_msg_id, state):
         f"✅ Вид: *{state['work_type']}*\n"
         f"✅ Работы: _{state['description']}_\n"
         f"✅ Моточас/Пробег: *{state['moto']}*\n\n"
-        f"Шаг 5 из 5 — ФИО исполнителя:\n"
+        f"Шаг 6 из 6 — ФИО исполнителя:\n"
         f"_(Фамилия и инициалы, например: Иванов И.И.)_"
     )
     if edit_msg_id:
@@ -1070,6 +1175,8 @@ def show_final_confirm(chat_id, state):
         f"🔁 Вид работ:      *{state['work_type']}*\n"
         f"📝 Описание:       _{state['description']}_\n"
         f"⏱ Моточас/Пробег: *{state['moto']}*\n"
+        f"🔩 Запчасти (снята): *{state.get('parts_old', 'НП')}*\n"
+        f"🔩 Запчасти (уст.):  *{state.get('parts_new', 'НП')}*\n"
         f"👷 Исполнитель:    *{state['fio']}*\n"
         f"{'─'*32}\n\n"
         f"Нажми *✅ Отправить* — данные запишутся в таблицу."
