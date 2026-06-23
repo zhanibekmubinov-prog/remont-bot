@@ -108,6 +108,10 @@ EQUIPMENT_LIST = [
     "Полуприцеп 91ACS06",
     "Полуприцеп 25ACR06",
     "Тракторный прицеп УЗПТ",
+    "Toyota Hilux 886AHL06",
+    "Toyota Hilux 779AHF06",
+    "Toyota Prado 917ATP01",
+    "Toyota Prado 050RAA05",
 ]
 
 
