@@ -2,71 +2,64 @@
 remont_bot_5.py — Telegram бот учёта ТО и ремонтов
 ТОО «Caspian Integrated Services»
 
-Автоматически записывает данные в Google Sheets.
+Записывает ТО и ремонты в реестр ТО платформы CIS (бланк F-002).
 Интерфейс: русский / қазақша (переключается кнопкой).
 
 ═══════════════════════════════════════════════════════════════════
-ЧТО ИЗМЕНИЛОСЬ В ЭТОЙ ВЕРСИИ
+ЧТО ИЗМЕНИЛОСЬ В ЭТОЙ ВЕРСИИ (2026-10-29)
 ═══════════════════════════════════════════════════════════════════
-1. СПИСОК ТЕХНИКИ БОЛЬШЕ НЕ ЗАХАРДКОЖЕН.
-   Бот читает вкладки самой таблицы. Добавили вкладку в Google Sheets —
-   она появилась в боте (кэш 5 минут, либо кнопка «🔄 Обновить список»).
-   Деплой для этого больше не нужен.
+1. GOOGLE-ТАБЛИЦЫ БОЛЬШЕ НЕТ. Реестр ТО перенесён в платформу CIS
+   (Техника → машина → Реестр ТО), таблица больше не читается.
+   Бот берёт список техники из платформы и пишет запись туда же,
+   через API платформы (/api/v1/equipment-service) по ключу бота.
+   Новая техника появляется в боте сама, когда её завели в платформе
+   (кэш 5 минут, либо кнопка «🔄 Обновить список»).
 
-2. ЗАПИСЬ ИДЁТ СТРОГО В ВЫБРАННУЮ ВКЛАДКУ (по её внутреннему ID/gid).
-   Старый «приблизительный» поиск листа по словам удалён — он мог молча
-   записать данные в чужую вкладку или в первый лист таблицы.
-   Если вкладку удалили/переименовали — бот покажет честную ошибку.
+2. ПРОВЕРКИ — КАК У ФОРМЫ В ПЛАТФОРМЕ. Дата не в будущем, показание
+   счётчика не меньше прошлого. Если платформа не приняла запись —
+   бот показывает её объяснение и даёт повторить, введённое не теряется.
+   Показание бот спрашивает как раньше («моточас / пробег»), а счётчик
+   выбирает платформа: основной у машины. Если у машины счётчик не
+   задан — показание не теряется, уходит в примечание записи, и бот
+   об этом предупреждает.
 
-3. ДВА ЯЗЫКА: русский и казахский. Выбор при первом /start,
-   потом кнопка «🌐 Тіл / Язык» или команда /lang.
-   ВАЖНО: в таблицу всё пишется по-русски, как и раньше
-   («ТО»/«Р», «Подрядчик», «1 день», «Склад у подрядчика»),
-   чтобы реестр остался единообразным.
+3. РЕЖИМ ВОПРОСОВ читает реестр ТО платформы (последние записи по
+   технике или обзор по всей технике).
 
-4. РЕЖИМ ВОПРОСОВ работает по всем вкладкам (раньше — только по первым 10)
-   и находит технику без ручного словаря синонимов.
-   AI отвечает на языке вопроса.
+4. Диалог, кнопки, языки и уведомление менеджеру — прежние. В реестр
+   всё пишется по-русски («ТО»/«Р», «1 день»), как и раньше.
 
 ═══════════════════════════════════════════════════════════════════
 ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (Railway → Variables)
 ═══════════════════════════════════════════════════════════════════
 BOT_TOKEN                 — токен бота от @BotFather              (обязательно)
-GOOGLE_SHEET_ID           — ID таблицы реестра                    (обязательно)
-GOOGLE_CREDENTIALS_JSON   — JSON сервисного аккаунта              (обязательно)
+PLATFORM_URL              — адрес платформы CIS, например
+                            https://cis-platform.up.railway.app   (обязательно)
+PLATFORM_KEY              — ключ бота: тот же, что в платформе
+                            «Админ-панель → Интеграции → Ключ
+                            Telegram-бота» (общий с ботом «Статус
+                            техники»)                              (обязательно)
 NOTIFY_CHAT_ID            — чат для уведомлений менеджеру         (опционально)
 ANTHROPIC_API_KEY         — ключ для режима вопросов              (опционально)
-SKIP_SHEETS               — служебные вкладки, скрыть из меню.
-                            Через запятую. По умолчанию:
-                            Sheet1, Лист1, Пустая форма, Шаблон, Template
-                            Плюс всегда скрываются вкладки, чьё имя
-                            начинается с «_» (например _bot_users).
-EQUIPMENT_CACHE_TTL       — сколько секунд кэшировать список вкладок (по умолч. 300)
+EQUIPMENT_CACHE_TTL       — сколько секунд кэшировать список техники (по умолч. 300)
 DEFAULT_LANG              — язык по умолчанию: ru или kz (по умолч. ru)
+TIMEZONE                  — часовой пояс даты записи (по умолч. Asia/Atyrau)
+
+GOOGLE_SHEET_ID, GOOGLE_CREDENTIALS_JSON и SKIP_SHEETS больше не нужны —
+их можно удалить из Variables.
 
 ═══════════════════════════════════════════════════════════════════
-ТОЧНАЯ КАРТА КОЛОНОК (из реального файла реестра) — НЕ МЕНЯЛАСЬ
+ЧТО ИДЁТ В ЗАПИСЬ РЕЕСТРА (колонки F-002)
 ═══════════════════════════════════════════════════════════════════
-Строки 1–9  = шапка документа (НЕ ТРОГАЕМ)
-Строка 10+  = данные (бот добавляет новые строки сюда)
-
-A  = Дата выполнения                  ← из бота: дата (auto)
-B  = Вид обслуживания (ТО, Р)         ← из бота: work_type
-C  = Наименование/содержание работ    ← из бота: description
-D  = Исполнитель подрядчик            ← всегда "Подрядчик"
-E  = Описание работ (подробно)        ← из бота: description
-F  = Текущий показатель счётчика      ← из бота: moto
-G  = Дата начала работ                ← из бота: дата (auto)
-H  = Дата конец работ                 ← из бота: дата (auto)
-I  = Продолжительность ремонта        ← всегда "1 день"
-J  = Тех. характеристики / замечания  ← пусто (заполняют вручную)
-K  = Запчасти план (P/N)              ← из бота: parts_old (снятая деталь)
-L  = Запчасти факт (P/N)              ← из бота: parts_new (установленная)
-M  = Место нахождения на складе       ← пусто (заполняют вручную)
-N  = Место хранения запчастей         ← "Склад у подрядчика"
-O  = Примечания                       ← пусто
-P  = ФИО, подписавший исполнитель     ← из бота: fio
-Q  = ФИО подписавший заказчик         ← из бота: fio
+Дата выполнения, начало и конец работ  ← дата записи (местное время)
+Вид обслуживания (ТО / Р)               ← work_type
+Описание выполненных работ               ← description
+Текущий показатель счётчика              ← moto (НП — без показания)
+Продолжительность                        ← «1 день»
+Запчасти снята / установлена (P/N)       ← parts_old / parts_new (НП — нет)
+Исполнитель и контролирующий             ← fio
+Источник записи в платформе — «Telegram»; автор — сотрудник, если его
+Telegram привязан к платформе, иначе имя из Telegram.
 """
 
 # ══════════════════════════════════════════════════════════════════
@@ -84,8 +77,8 @@ from datetime import datetime
 import telebot
 from telebot import types
 
-import gspread
-from google.oauth2.service_account import Credentials
+from urllib.parse import quote
+from zoneinfo import ZoneInfo
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -101,31 +94,20 @@ logger = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════
 # СЕКРЕТЫ И НАСТРОЙКИ — читаем из Railway Variables
 # ══════════════════════════════════════════════════════════════════
-BOT_TOKEN               = os.environ.get("BOT_TOKEN")
-GOOGLE_SHEET_ID         = os.environ.get("GOOGLE_SHEET_ID")
-NOTIFY_CHAT_ID          = os.environ.get("NOTIFY_CHAT_ID")
-GOOGLE_CREDENTIALS_JSON = os.environ.get("GOOGLE_CREDENTIALS_JSON")
-ANTHROPIC_API_KEY       = os.environ.get("ANTHROPIC_API_KEY")
+BOT_TOKEN         = os.environ.get("BOT_TOKEN")
+PLATFORM_URL      = (os.environ.get("PLATFORM_URL") or "").strip().rstrip("/")
+PLATFORM_KEY      = (os.environ.get("PLATFORM_KEY") or "").strip()
+NOTIFY_CHAT_ID    = os.environ.get("NOTIFY_CHAT_ID")
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+TIMEZONE          = os.environ.get("TIMEZONE", "Asia/Atyrau")
 
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN не задан в переменных окружения")
-if not GOOGLE_SHEET_ID:
-    raise ValueError("❌ GOOGLE_SHEET_ID не задан в переменных окружения")
-if not GOOGLE_CREDENTIALS_JSON:
-    raise ValueError("❌ GOOGLE_CREDENTIALS_JSON не задан в переменных окружения")
+if not PLATFORM_URL or not PLATFORM_KEY:
+    raise ValueError("❌ PLATFORM_URL и PLATFORM_KEY не заданы в переменных "
+                     "окружения (ключ — в платформе: Админ-панель → Интеграции)")
 
-# Служебные вкладки, которые НЕ показываем в списке техники
-_SKIP_DEFAULT = [
-    "sheet1", "лист1", "пустая форма", "пустой бланк",
-    "шаблон", "template", "форма",
-]
-SKIP_SHEETS = set(_SKIP_DEFAULT) | {
-    s.strip().lower()
-    for s in os.environ.get("SKIP_SHEETS", "").split(",")
-    if s.strip()
-}
-
-# Сколько секунд держать список вкладок в кэше
+# Сколько секунд держать список техники в кэше
 try:
     EQUIPMENT_CACHE_TTL = int(os.environ.get("EQUIPMENT_CACHE_TTL", "300"))
 except ValueError:
@@ -133,9 +115,6 @@ except ValueError:
 
 # Сколько кнопок техники показывать на одной странице
 PAGE_SIZE = 50
-
-# Шапка реестра: строки 1–9. Данные начинаются с строки 10.
-HEADER_ROWS = 9
 
 DEFAULT_LANG = os.environ.get("DEFAULT_LANG", "ru").strip().lower()
 if DEFAULT_LANG not in ("ru", "kz"):
@@ -146,7 +125,7 @@ if DEFAULT_LANG not in ("ru", "kz"):
 # ПЕРЕВОДЫ ИНТЕРФЕЙСА (ru / kz)
 # ══════════════════════════════════════════════════════════════════
 # ВАЖНО: это только то, что ВИДИТ пользователь.
-# В таблицу всегда пишется по-русски (ТО / Р / Подрядчик / 1 день).
+# В реестр всегда пишется по-русски (ТО / Р / 1 день).
 T = {
     "ru": {
         # ── кнопки нижнего меню ──
@@ -190,11 +169,10 @@ T = {
         "step1_title":    "🔧 *Новая запись ТО/Ремонт*",
         "step1_prompt":   "Выберите технику:",
         "list_empty": (
-            "❌ В таблице не найдено ни одной вкладки с техникой.\n\n"
-            "Проверьте, что сервисному аккаунту открыт доступ к таблице "
-            "и что вкладки не попали в список служебных (SKIP_SHEETS)."
+            "❌ В платформе не найдено ни одной единицы техники.\n\n"
+            "Проверьте раздел «Техника» в платформе CIS."
         ),
-        "list_error":     "❌ Не удалось прочитать список вкладок:\n`{err}`",
+        "list_error":     "❌ Не удалось получить список техники из платформы:\n`{err}`",
         "list_refreshed": "🔄 Список обновлён. Найдено единиц техники: {n}",
 
         # ── шаг 2: вид работ ──
@@ -218,6 +196,7 @@ T = {
         "step4_hint":     "_(Напишите число, например: 16 500 — или нажмите «НП»)_",
         "btn_np":         "НП (нет показаний)",
         "lbl_moto":       "Моточас/Пробег",
+        "moto_bad":       "⚠️ Не понял число. Напишите показание цифрами, например: 16 500 — или нажмите «НП».",
 
         # ── шаг 5: запчасти ──
         "step5_title":    "Запчасти / материалы:",
@@ -248,14 +227,14 @@ T = {
         # ── финал ──
         "final_title":    "📋 *ИТОГОВАЯ ЗАПИСЬ*",
         "lbl_date":       "Дата",
-        "final_hint":     "Нажми *✅ Отправить* — данные запишутся в таблицу.",
-        "btn_send":       "✅ Отправить в таблицу",
+        "final_hint":     "Нажми *✅ Отправить* — запись попадёт в реестр ТО платформы.",
+        "btn_send":       "✅ Отправить в реестр",
         "btn_fix_fio":    "⬅️ Исправить ФИО",
         "btn_restart":    "🔄 Начать заново",
-        "saving":         "⏳ Сохраняю запись в Google Sheets...",
+        "saving":         "⏳ Сохраняю запись в реестр ТО...",
         "saved": (
-            "✅ *Запись добавлена в таблицу!*\n\n"
-            "📊 Лист: _{sheet}_\n"
+            "✅ *Запись добавлена в реестр ТО!*\n\n"
+            "📊 Запись: _{sheet}_\n"
             "📅 Дата: {date}\n"
             "🔧 Техника: {equipment}\n"
             "🔁 Вид: {wtype}\n\n"
@@ -269,13 +248,13 @@ T = {
         ),
         "btn_retry":      "🔄 Попробовать снова",
         "sheet_gone": (
-            "❌ Вкладка «{title}» больше не найдена в таблице.\n\n"
-            "Возможно, её переименовали или удалили. "
+            "❌ Техника «{title}» больше не найдена в платформе.\n\n"
+            "Возможно, её код изменили или карточку удалили. "
             "Нажмите 🔄 «Обновить список техники» и выберите заново."
         ),
         "eq_gone": (
-            "⚠️ Эта техника больше не найдена в таблице "
-            "(вкладку переименовали или удалили).\nСписок обновлён — выберите заново."
+            "⚠️ Эта техника больше не найдена в платформе "
+            "(код изменили или карточку удалили).\nСписок обновлён — выберите заново."
         ),
 
         # ── помощь ──
@@ -314,7 +293,7 @@ T = {
         ),
         "qa_next":        "🤖 Задайте следующий вопрос:",
         "qa_searching":   "🔍 Ищу информацию в реестре...",
-        "qa_reading":     "📊 Читаю данные из таблицы...",
+        "qa_reading":     "📊 Читаю реестр ТО...",
         "qa_thinking":    "🤖 AI анализирует данные...",
         "qa_answer":      "🤖 *Ответ:*",
         "btn_qa_more":    "🔍 Задать ещё вопрос",
@@ -328,7 +307,7 @@ T = {
         "qa_ai_error":    "❌ Ошибка AI ({code}). Попробуйте позже.",
         "qa_timeout":     "❌ AI не ответил вовремя. Попробуйте снова.",
         "qa_no_data":     "Данные не найдены",
-        "qa_empty_tab":   "В листе {title} нет записей.",
+        "qa_empty_tab":   "По технике {title} записей нет.",
     },
 
     "kz": {
@@ -373,11 +352,10 @@ T = {
         "step1_title":    "🔧 *Жаңа жазба ТҚ/Жөндеу*",
         "step1_prompt":   "Техниканы таңдаңыз:",
         "list_empty": (
-            "❌ Кестеде техника беттері табылмады.\n\n"
-            "Сервистік аккаунтқа кестеге кіру рұқсаты берілгенін және "
-            "беттер қызметтік тізімге (SKIP_SHEETS) кірмегенін тексеріңіз."
+            "❌ Платформада бірде-бір техника табылмады.\n\n"
+            "CIS платформасындағы «Техника» бөлімін тексеріңіз."
         ),
-        "list_error":     "❌ Беттер тізімін оқу мүмкін болмады:\n`{err}`",
+        "list_error":     "❌ Платформадан техника тізімін алу мүмкін болмады:\n`{err}`",
         "list_refreshed": "🔄 Тізім жаңартылды. Табылған техника саны: {n}",
 
         # ── шаг 2: вид работ ──
@@ -401,6 +379,7 @@ T = {
         "step4_hint":     "_(Санды жазыңыз, мысалы: 16 500 — немесе «НП» батырмасын басыңыз)_",
         "btn_np":         "НП (көрсеткіш жоқ)",
         "lbl_moto":       "Мотосағат/Жүріс",
+        "moto_bad":       "⚠️ Санды түсінбедім. Көрсеткішті цифрмен жазыңыз, мысалы: 16 500 — немесе «НП» батырмасын басыңыз.",
 
         # ── шаг 5: запчасти ──
         "step5_title":    "Қосалқы бөлшектер / материалдар:",
@@ -431,14 +410,14 @@ T = {
         # ── финал ──
         "final_title":    "📋 *ҚОРЫТЫНДЫ ЖАЗБА*",
         "lbl_date":       "Күні",
-        "final_hint":     "*✅ Жіберу* батырмасын басыңыз — деректер кестеге жазылады.",
-        "btn_send":       "✅ Кестеге жіберу",
+        "final_hint":     "*✅ Жіберу* батырмасын басыңыз — жазба платформаның ТҚ тізіліміне түседі.",
+        "btn_send":       "✅ Тізілімге жіберу",
         "btn_fix_fio":    "⬅️ Аты-жөнін түзету",
         "btn_restart":    "🔄 Қайтадан бастау",
-        "saving":         "⏳ Жазба Google Sheets-ке сақталып жатыр...",
+        "saving":         "⏳ Жазба ТҚ тізіліміне сақталып жатыр...",
         "saved": (
-            "✅ *Жазба кестеге қосылды!*\n\n"
-            "📊 Бет: _{sheet}_\n"
+            "✅ *Жазба ТҚ тізіліміне қосылды!*\n\n"
+            "📊 Жазба: _{sheet}_\n"
             "📅 Күні: {date}\n"
             "🔧 Техника: {equipment}\n"
             "🔁 Түрі: {wtype}\n\n"
@@ -452,13 +431,13 @@ T = {
         ),
         "btn_retry":      "🔄 Қайта көру",
         "sheet_gone": (
-            "❌ «{title}» беті кестеде табылмады.\n\n"
-            "Оның аты өзгертілген немесе жойылған болуы мүмкін. "
+            "❌ «{title}» техникасы платформада табылмады.\n\n"
+            "Оның коды өзгертілген немесе карточкасы жойылған болуы мүмкін. "
             "🔄 «Техника тізімін жаңарту» батырмасын басып, қайта таңдаңыз."
         ),
         "eq_gone": (
-            "⚠️ Бұл техника кестеде табылмады "
-            "(беттің аты өзгертілген немесе жойылған).\nТізім жаңартылды — қайта таңдаңыз."
+            "⚠️ Бұл техника платформада табылмады "
+            "(коды өзгертілген немесе карточкасы жойылған).\nТізім жаңартылды — қайта таңдаңыз."
         ),
 
         # ── помощь ──
@@ -497,7 +476,7 @@ T = {
         ),
         "qa_next":        "🤖 Келесі сұрағыңызды қойыңыз:",
         "qa_searching":   "🔍 Тізілімнен ақпарат іздеп жатырмын...",
-        "qa_reading":     "📊 Кестеден деректерді оқып жатырмын...",
+        "qa_reading":     "📊 ТҚ тізілімін оқып жатырмын...",
         "qa_thinking":    "🤖 AI деректерді талдап жатыр...",
         "qa_answer":      "🤖 *Жауап:*",
         "btn_qa_more":    "🔍 Тағы сұрақ қою",
@@ -511,7 +490,7 @@ T = {
         "qa_ai_error":    "❌ AI қатесі ({code}). Кейінірек көріңіз.",
         "qa_timeout":     "❌ AI уақытында жауап бермеді. Қайта көріңіз.",
         "qa_no_data":     "Деректер табылмады",
-        "qa_empty_tab":   "{title} бетінде жазбалар жоқ.",
+        "qa_empty_tab":   "{title} техникасы бойынша жазбалар жоқ.",
     },
 }
 
@@ -548,70 +527,73 @@ def md(text) -> str:
 
 
 # ══════════════════════════════════════════════════════════════════
-# GOOGLE SHEETS — ПОДКЛЮЧЕНИЕ (с кэшем, чтобы не авторизоваться каждый раз)
+# ПЛАТФОРМА CIS — API РЕЕСТРА ТО (вместо Google Sheets)
 # ══════════════════════════════════════════════════════════════════
-_gs_lock = threading.Lock()
-_gs = {"client": None, "ss": None}
-
-SCOPES = [
-    "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive",
-]
+SERVICE_API = "/api/v1/equipment-service"
 
 
-def get_google_client():
-    """Создаёт (или переиспользует) авторизованное подключение к Google Sheets API."""
-    with _gs_lock:
-        if _gs["client"] is None:
-            creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
-            creds = Credentials.from_service_account_info(creds_dict, scopes=SCOPES)
-            _gs["client"] = gspread.authorize(creds)
-        return _gs["client"]
+class PlatformError(Exception):
+    """Платформа отказала: текст ошибки показываем человеку как есть."""
+
+    def __init__(self, text, status=None):
+        super().__init__(text)
+        self.status = status
 
 
-def get_spreadsheet(force: bool = False):
-    """Возвращает объект таблицы реестра. force=True — пересоздать подключение."""
-    with _gs_lock:
-        if force:
-            _gs["client"] = None
-            _gs["ss"] = None
-        ss = _gs["ss"]
-    if ss is None:
-        client = get_google_client()
-        ss = client.open_by_key(GOOGLE_SHEET_ID)
-        with _gs_lock:
-            _gs["ss"] = ss
-    return ss
+_http = requests.Session()
+
+
+def platform(method, path="", **kw):
+    """Запрос к API реестра ТО платформы. Ответ — словарь из JSON."""
+    try:
+        r = _http.request(method, PLATFORM_URL + SERVICE_API + path, timeout=30,
+                          headers={"Authorization": f"Bearer {PLATFORM_KEY}"},
+                          **kw)
+    except requests.RequestException as e:
+        raise PlatformError(f"нет связи с платформой: {e}")
+    try:
+        data = r.json()
+    except ValueError:
+        raise PlatformError(f"платформа ответила {r.status_code}", r.status_code)
+    if r.status_code != 200 or not data.get("ok"):
+        raise PlatformError(data.get("error")
+                            or f"платформа ответила {r.status_code}",
+                            r.status_code)
+    return data
+
+
+def local_now():
+    """Сейчас по местному времени (сервер бота живёт в UTC)."""
+    return datetime.now(ZoneInfo(TIMEZONE))
+
+
+def who_is(user):
+    """Подпись автора для журнала платформы: «Имя Фамилия (@ник)»."""
+    name = " ".join(x for x in (getattr(user, "first_name", None),
+                                getattr(user, "last_name", None)) if x)
+    if getattr(user, "username", None):
+        name += f" (@{user.username})"
+    return name.strip() or str(user.id)
 
 
 # ══════════════════════════════════════════════════════════════════
-# СПИСОК ТЕХНИКИ — ЧИТАЕТСЯ ИЗ ВКЛАДОК ТАБЛИЦЫ (а не из кода)
+# СПИСОК ТЕХНИКИ — ИЗ ПЛАТФОРМЫ
 # ══════════════════════════════════════════════════════════════════
 _eq_lock = threading.Lock()
-_eq_cache = {"ts": 0.0, "items": []}   # items: [{"id": gid, "title": "..."}]
+_eq_cache = {"ts": 0.0, "items": []}   # items: [{"id": код, "title": ..., ...}]
 
 
-def is_service_sheet(title: str) -> bool:
-    """Служебная вкладка (шаблон, Sheet1, всё что начинается с «_») — не техника."""
-    clean = (title or "").strip().lower()
-    if not clean:
-        return True
-    if clean.startswith("_"):
-        return True
-    return clean in SKIP_SHEETS
-
-
-def get_equipment_sheets(force: bool = False):
+def get_equipment_list(force: bool = False):
     """
-    Возвращает список техники: [{"id": gid, "title": ..., "display": ...}].
+    Возвращает список техники: [{"id": код, "title", "display", "search"}].
 
-    ВАЖНО про title и display:
-      title   — НАСТОЯЩЕЕ имя вкладки, как в таблице (иногда с пробелом на конце,
-                например "№2 Насос 12ABN "). Используется в A1-диапазонах,
-                иначе Google API не найдёт лист.
-      display — то же имя без лишних пробелов, для кнопок и сообщений.
+      id      — код машины в платформе (B1, J7…): идёт в callback_data
+                (коротко, латиница — в лимит Telegram 64 байта влезает).
+      title / display — «B1 · Насосная установка · 882AHDE» для кнопок.
+      search  — то же + категория («Насос ГРП»): по нему режим вопросов
+                узнаёт технику в тексте вопроса.
 
-    Порядок — как вкладки идут в самой таблице (можно менять мышкой в Google Sheets).
+    Порядок — как в разделе «Техника» платформы.
     Результат кэшируется на EQUIPMENT_CACHE_TTL секунд.
     """
     now = time.time()
@@ -620,19 +602,11 @@ def get_equipment_sheets(force: bool = False):
             if _eq_cache["items"] and (now - _eq_cache["ts"]) < EQUIPMENT_CACHE_TTL:
                 return list(_eq_cache["items"])
 
-    try:
-        ss = get_spreadsheet()
-        worksheets = ss.worksheets()
-    except Exception as first_err:
-        # Возможно, подключение устарело — пробуем переподключиться один раз
-        logger.warning(f"Повторное подключение к Google Sheets: {first_err}")
-        ss = get_spreadsheet(force=True)
-        worksheets = ss.worksheets()
-
+    units = platform("GET")["units"]
     items = [
-        {"id": w.id, "title": w.title, "display": w.title.strip()}
-        for w in worksheets
-        if not is_service_sheet(w.title)
+        {"id": u["code"], "title": u["title"], "display": u["title"],
+         "search": f"{u['title']} {u.get('category') or ''}".strip()}
+        for u in units
     ]
 
     with _eq_lock:
@@ -643,122 +617,105 @@ def get_equipment_sheets(force: bool = False):
     return list(items)
 
 
-def get_equipment_by_id(gid):
-    """Ищет технику в кэше по gid вкладки. Возвращает dict или None."""
-    try:
-        gid = int(gid)
-    except (TypeError, ValueError):
-        return None
-    for item in get_equipment_sheets():
-        if item["id"] == gid:
+def get_equipment_by_id(code):
+    """Ищет технику по коду. Возвращает dict или None."""
+    code = str(code or "")
+    for item in get_equipment_list():
+        if item["id"] == code:
             return item
-    # Могли только что добавить вкладку — пробуем обновить кэш
-    for item in get_equipment_sheets(force=True):
-        if item["id"] == gid:
+    # Могли только что завести технику — пробуем обновить кэш
+    for item in get_equipment_list(force=True):
+        if item["id"] == code:
             return item
     return None
 
 
 # ══════════════════════════════════════════════════════════════════
-# GOOGLE SHEETS — ЗАПИСЬ
+# ЗАПИСЬ В РЕЕСТР ТО ПЛАТФОРМЫ
 # ══════════════════════════════════════════════════════════════════
-def write_to_google_sheets(data: dict) -> tuple:
-    """
-    Записывает одну строку данных в КОНКРЕТНУЮ вкладку по её gid.
+NP_WORDS = {"нп", "н/п", "-", "—", "нет", "жоқ"}
 
-    Никакого «приблизительного» поиска листа больше нет:
-    если вкладки с таким gid нет — возвращаем ошибку, а не пишем куда попало.
 
-    Возвращает (True, имя_листа) или (False, текст_ошибки)
+def is_np(text) -> bool:
+    """«НП» (не применимо / нет показаний / нет запчастей)."""
+    return str(text or "").strip().lower() in NP_WORDS
+
+
+def parse_moto(text):
+    """«16 500», «16500,5», «16 500 м/ч» → 16500.0; «НП» → None;
+    не число → False (бот переспросит)."""
+    if is_np(text):
+        return None
+    m = re.search(r"\d[\d\s]*(?:[.,]\d+)?", str(text or ""))
+    if not m:
+        return False
+    digits = "".join(ch for ch in m.group(0) if not ch.isspace())
+    try:
+        return float(digits.replace(",", "."))
+    except ValueError:
+        return False
+
+
+def write_record(data: dict) -> tuple:
     """
-    sheet_id = data.get("sheet_id")
-    if sheet_id is None:
-        return False, "sheet_id не задан (перезапустите запись)"
+    Записывает ТО / ремонт в реестр ТО платформы.
+
+    Поля — те же, что раньше шли в строку таблицы: начало и конец работ =
+    дата записи, продолжительность «1 день», ФИО — исполнитель и
+    контролирующий. Счётчик бот не называет — платформа берёт основной
+    счётчик машины.
+
+    Возвращает (True, {"label", "unit", "warning"}) или
+    (False, текст ошибки | "SHEET_GONE" — техники с таким кодом больше нет).
+    """
+    code = data.get("code")
+    if not code:
+        return False, "техника не выбрана (перезапустите запись)"
+    try:
+        day = datetime.strptime(data.get("date") or "", "%d.%m.%Y").date()
+    except ValueError:
+        day = local_now().date()
+    fio = (data.get("fio") or "").strip()
+    body = {
+        "kind":        data.get("work_type", ""),
+        "date":        day.isoformat(),
+        "description": data.get("description", ""),
+        "date_start":  day.isoformat(),
+        "date_end":    day.isoformat(),
+        "duration":    "1 день",
+        "executor":    fio,
+        "controller":  fio,
+        "tg_id":       data.get("tg_id"),
+        "author":      data.get("author"),
+    }
+    moto = parse_moto(data.get("moto", "НП"))
+    if isinstance(moto, float):
+        body["reading"] = moto
+    for key, field in (("parts_old", "parts_removed"), ("parts_new", "parts_new")):
+        value = data.get(key, "НП")
+        if not is_np(value):
+            body[field] = str(value).strip()
 
     try:
-        ss = get_spreadsheet()
-        try:
-            sheet = ss.get_worksheet_by_id(int(sheet_id))
-        except gspread.exceptions.WorksheetNotFound:
-            # Кэш мог устареть — обновляем метаданные и пробуем ещё раз
-            ss = get_spreadsheet(force=True)
-            sheet = ss.get_worksheet_by_id(int(sheet_id))
-
-        today = datetime.now().strftime("%d.%m.%Y")
-
-        # ── Найти первую свободную строку после шапки ─────────────────
-        # Шапка = строки 1..HEADER_ROWS (9). Данные начинаются с строки 10.
-        # Смотрим ВСЕ колонки A..Q, а не только A: если в последней строке
-        # колонка A пустая (дописали вручную с середины), запись по колонке A
-        # затёрла бы эту строку.
-        existing = sheet.get_values("A1:Q") or []
-        last_filled = 0
-        for idx, r in enumerate(existing, start=1):
-            if any((c or "").strip() for c in r):
-                last_filled = idx
-        next_row = max(last_filled + 1, HEADER_ROWS + 1)
-
-        logger.info(
-            f"Лист '{sheet.title}' (gid={sheet.id}): "
-            f"последняя строка с данными {last_filled}, пишем в строку {next_row}"
-        )
-
-        # ── Точная карта колонок A→Q (реестр компании) ───────────────
-        # ВНИМАНИЕ: значения в таблице ВСЕГДА по-русски,
-        # независимо от языка интерфейса бота.
-        row = [
-            today,                          # A — Дата выполнения
-            data.get("work_type", ""),      # B — Вид обслуживания (ТО / Р)
-            data.get("description", ""),    # C — Наименование/содержание работ
-            "Подрядчик",                    # D — Исполнитель
-            data.get("description", ""),    # E — Описание выполненных работ
-            data.get("moto", "НП"),         # F — Текущий показатель счётчика
-            today,                          # G — Дата начала
-            today,                          # H — Дата конец
-            "1 день",                       # I — Продолжительность
-            "",                             # J — Тех. хар. (вручную)
-            data.get("parts_old", "НП"),    # K — Запчасти план P/N (снята)
-            data.get("parts_new", "НП"),    # L — Запчасти факт P/N (установлена)
-            "",                             # M — Место на складе (вручную)
-            "Склад у подрядчика",           # N — Место хранения
-            "",                             # O — Примечания (вручную)
-            data.get("fio", ""),            # P — ФИО исполнитель
-            data.get("fio", ""),            # Q — ФИО заказчик
-        ]
-
-        # Пишем в конкретную строку — существующие данные не сдвигаются
-        sheet.update(
-            values=[row],
-            range_name=f"A{next_row}:Q{next_row}",
-            value_input_option="USER_ENTERED",
-        )
-
-        logger.info(
-            f"✅ Записано в '{sheet.title}' строка {next_row}: "
-            f"дата={today}, вид={data.get('work_type')}, "
-            f"мото={data.get('moto')}, ФИО={data.get('fio')}"
-        )
-        return True, sheet.title
-
-    except gspread.exceptions.WorksheetNotFound:
-        title = data.get("equipment", "?")
-        logger.error(f"❌ Вкладка gid={sheet_id} ('{title}') не найдена")
-        return False, "SHEET_GONE"
-
-    except gspread.exceptions.SpreadsheetNotFound:
-        msg = "Таблица не найдена. Проверь GOOGLE_SHEET_ID."
-        logger.error(f"❌ {msg}")
-        return False, msg
-
-    except gspread.exceptions.APIError as e:
-        msg = f"Ошибка Google API: {e}"
-        logger.error(f"❌ {msg}")
-        return False, msg
-
+        res = platform("POST", "/" + quote(code, safe=""), json=body)
+    except PlatformError as e:
+        if e.status == 404:
+            logger.error(f"❌ Техники {code} нет в платформе")
+            return False, "SHEET_GONE"
+        logger.error(f"❌ Платформа не приняла запись по {code}: {e}")
+        return False, str(e)
     except Exception as e:
-        msg = str(e)
         logger.error(f"❌ Неожиданная ошибка при записи: {e}", exc_info=True)
-        return False, msg
+        return False, str(e)
+
+    rec = res.get("record") or {}
+    logger.info(
+        f"✅ Записано в реестр ТО: {code} — {rec.get('label')}, "
+        f"мото={data.get('moto')}, ФИО={fio}"
+    )
+    return True, {"label": rec.get("label", ""),
+                  "unit": rec.get("unit") or data.get("equipment", ""),
+                  "warning": res.get("warning")}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -776,13 +733,13 @@ def clear_state(user_id):  user_data.pop(user_id, None)
 # сообщения получасовой давности, когда бот уже перезапущен или
 # начата запись по другой технике — тогда шаг просто не пустим дальше.
 REQUIRED_FOR = {
-    "work_type":   ("sheet_id", "equipment"),
-    "description": ("sheet_id", "equipment", "work_type"),
-    "moto":        ("sheet_id", "equipment", "work_type", "description"),
-    "parts":       ("sheet_id", "equipment", "work_type", "description", "moto"),
-    "fio":         ("sheet_id", "equipment", "work_type", "description", "moto",
+    "work_type":   ("code", "equipment"),
+    "description": ("code", "equipment", "work_type"),
+    "moto":        ("code", "equipment", "work_type", "description"),
+    "parts":       ("code", "equipment", "work_type", "description", "moto"),
+    "fio":         ("code", "equipment", "work_type", "description", "moto",
                     "parts_old", "parts_new"),
-    "final":       ("sheet_id", "equipment", "work_type", "description", "moto",
+    "final":       ("code", "equipment", "work_type", "description", "moto",
                     "parts_old", "parts_new", "fio", "date"),
 }
 
@@ -914,7 +871,8 @@ def _token_score(tok: str, title_tokens, title_norm: str) -> int:
 def find_sheet_for_question(question: str, items):
     """
     Пытается понять, о какой технике спрашивают.
-    Сравнивает слова вопроса с НАЗВАНИЯМИ ВКЛАДОК — поэтому работает
+    Сравнивает слова вопроса с названием техники в платформе (код, марка,
+    госномер, категория) — поэтому работает
     и для только что добавленной техники, без правок кода.
 
     Если несколько единиц техники подходят одинаково хорошо
@@ -930,7 +888,7 @@ def find_sheet_for_question(question: str, items):
 
     scored = []
     for item in items:
-        title_norm = _norm(item["title"])
+        title_norm = _norm(item.get("search") or item["title"])
         title_tokens = set(title_norm.split())
         score = sum(_token_score(tok, title_tokens, title_norm) for tok in q_tokens)
         scored.append((score, item))
@@ -947,90 +905,69 @@ def find_sheet_for_question(question: str, items):
 
 
 # ══════════════════════════════════════════════════════════════════
-# Q&A — ЧТЕНИЕ ДАННЫХ ИЗ ТАБЛИЦЫ
+# Q&A — ЧТЕНИЕ РЕЕСТРА ТО ИЗ ПЛАТФОРМЫ
 # ══════════════════════════════════════════════════════════════════
 MAX_ROWS_SINGLE_TAB = 40      # сколько последних записей брать по одной технике
 ROWS_PER_TAB_OVERVIEW = 3     # сколько последних записей брать по каждой технике
 MAX_CHARS_TO_AI = 45000       # ограничение объёма данных для AI
 
 
-def _a1(title: str, rng: str = "A10:Q") -> str:
-    """Имя вкладки в A1-нотации с экранированием кавычек."""
-    return "'" + str(title).replace("'", "''") + "'!" + rng
+def _ru_date(iso) -> str:
+    try:
+        return datetime.strptime(iso or "", "%Y-%m-%d").strftime("%d.%m.%Y")
+    except ValueError:
+        return ""
 
 
-def _fmt_row(row, index=None) -> str:
-    def g(i):
-        return row[i].strip() if len(row) > i and row[i] else ""
+def _fmt_record(r, index=None) -> str:
+    def g(key):
+        v = r.get(key)
+        return str(v).strip() if v not in (None, "") else ""
+    moto = f"{g('reading')} {g('unit')}".strip() if g("reading") else ""
     head = f"Запись {index}: " if index else "  "
     return (
-        f"{head}Дата={g(0)} | Вид={g(1)} | Основание={g(2)} | "
-        f"Состояние до={g(3)} | Описание={g(4)} | Моточасы={g(5)} | "
-        f"Начало={g(6)} | Конец={g(7)} | Длит={g(8)} | "
-        f"Запчасти план={g(10)} | Запчасти факт={g(11)} | "
-        f"Хранение={g(13)} | Исполнитель={g(15)} | Контролирующий={g(16)}"
+        f"{head}Дата={_ru_date(r.get('date'))} | Вид={g('kind')} | "
+        f"Основание={g('reason')} | Состояние до={g('state_before')} | "
+        f"Описание={g('description')} | Моточасы={moto} | "
+        f"Начало={_ru_date(r.get('date_start'))} | "
+        f"Конец={_ru_date(r.get('date_end'))} | Длит={g('duration')} | "
+        f"Запчасти план={g('parts_removed')} | Запчасти факт={g('parts_new')} | "
+        f"Примечание={g('comment')} | Исполнитель={g('executor')} | "
+        f"Контролирующий={g('controller')}"
     )
 
 
 def read_single_tab(item, user_id=None) -> str:
-    """Все записи по одной единице техники."""
-    ss = get_spreadsheet()
-    try:
-        res = ss.values_batch_get([_a1(item["title"])])
-    except Exception as e:
-        logger.warning(f"Не удалось прочитать '{item['title']}' ({e}), обновляю список")
-        fresh = get_equipment_by_id(item["id"])
-        if fresh is None:
-            raise
-        res = ss.values_batch_get([_a1(fresh["title"])])
-    values = (res.get("valueRanges") or [{}])[0].get("values", []) or []
-    rows = [r for r in values if any((v or "").strip() for v in r)]
-
+    """Последние записи по одной единице техники."""
+    res = platform("GET", "/" + quote(item["id"], safe="") + "/history",
+                   params={"limit": MAX_ROWS_SINGLE_TAB})
+    rows = res.get("records") or []
     if not rows:
         return t(user_id, "qa_empty_tab", title=item["display"]) if user_id \
-            else f"В листе {item['display']} нет записей."
+            else f"По технике {item['display']} записей нет."
 
     truncated = ""
-    if len(rows) > MAX_ROWS_SINGLE_TAB:
-        truncated = f"(показаны последние {MAX_ROWS_SINGLE_TAB} из {len(rows)} записей)"
-        rows = rows[-MAX_ROWS_SINGLE_TAB:]
+    total = res.get("total", len(rows))
+    if total > len(rows):
+        truncated = f"(показаны последние {len(rows)} из {total} записей)"
 
     out = [f"=== {item['display']} {truncated} ==="]
     for i, row in enumerate(rows, 1):
-        out.append(_fmt_row(row, i))
+        out.append(_fmt_record(row, i))
     return "\n".join(out)
 
 
-def read_all_tabs(items, user_id=None) -> str:
-    """
-    Последние записи по ВСЕЙ технике — одним batch-запросом к Google API
-    (раньше читались только первые 10 вкладок отдельными запросами).
-    """
-    if not items:
-        return t(user_id, "qa_no_data") if user_id else "Данные не найдены"
-
-    ss = get_spreadsheet()
-    try:
-        res = ss.values_batch_get([_a1(i["title"]) for i in items])
-    except Exception as e:
-        # Одну вкладку переименовали/удалили → Google отклоняет ВЕСЬ батч.
-        # Обновляем список вкладок и пробуем один раз заново.
-        logger.warning(f"Батч-чтение не удалось ({e}), обновляю список вкладок")
-        items = get_equipment_sheets(force=True)
-        if not items:
-            return t(user_id, "qa_no_data") if user_id else "Данные не найдены"
-        res = ss.values_batch_get([_a1(i["title"]) for i in items])
-    value_ranges = res.get("valueRanges") or []
-
+def read_all_tabs(items=None, user_id=None) -> str:
+    """Последние записи по ВСЕЙ технике — одним запросом к платформе."""
+    units = platform("GET", params={"last": ROWS_PER_TAB_OVERVIEW})["units"]
     out = []
-    for item, vr in zip(items, value_ranges):
-        values = vr.get("values", []) or []
-        rows = [r for r in values if any((v or "").strip() for v in r)]
+    for u in units:
+        rows = u.get("records") or []
         if not rows:
             continue
-        out.append(f"\n=== {item['display']} (всего записей: {len(rows)}) ===")
-        for row in rows[-ROWS_PER_TAB_OVERVIEW:]:
-            out.append(_fmt_row(row))
+        out.append(f"\n=== {u['title']} (всего записей: {u.get('total', len(rows))}) ===")
+        for row in rows:
+            out.append(_fmt_record(row))
 
     text = "\n".join(out)
     if len(text) > MAX_CHARS_TO_AI:
@@ -1044,12 +981,12 @@ def get_sheet_data_for_question(question: str, user_id=None) -> str:
     Ошибки НЕ глотаем — иначе AI получил бы текст ошибки как «данные»
     и ответил «информация не найдена». Пусть пользователь видит сбой.
     """
-    items = get_equipment_sheets()
+    items = get_equipment_list()
     item, score = find_sheet_for_question(question, items)
     if item:
         logger.info(f"QA: вопрос отнесён к '{item['display']}' (score={score})")
         return read_single_tab(item, user_id)
-    logger.info(f"QA: конкретная техника не определена (score={score}), читаю все вкладки")
+    logger.info(f"QA: конкретная техника не определена (score={score}), читаю обзор")
     return read_all_tabs(items, user_id)
 
 
@@ -1414,7 +1351,7 @@ def show_equipment_list(chat_id, user_id, edit_msg_id=None, page=0, force=False,
     set_state(user_id, {"step": "equipment", "page": page})
 
     try:
-        items = get_equipment_sheets(force=force)
+        items = get_equipment_list(force=force)
     except Exception as e:
         logger.error(f"Не удалось получить список вкладок: {e}", exc_info=True)
         text = t(user_id, "list_error", err=e)
@@ -1494,7 +1431,7 @@ def cb_equipment_refresh(call):
     ack(call)
     uid = call.from_user.id
     try:
-        items = get_equipment_sheets(force=True)
+        items = get_equipment_list(force=True)
         note = t(uid, "list_refreshed", n=len(items))
     except Exception as e:
         note = t(uid, "list_error", err=e)
@@ -1531,7 +1468,7 @@ def cb_equipment(call):
 
     state = get_state(uid)
     state.update({
-        "sheet_id":  item["id"],
+        "code":      item["id"],
         "equipment": item["display"],
         "step":      "work_type",
     })
@@ -1659,7 +1596,12 @@ def handle_moto(message):
         clear_state(uid)          # несогласованное состояние — сбрасываем
         say_expired(message.chat.id, uid)
         return
-    state.update({"moto": message.text, "step": "parts"})
+    if parse_moto(message.text) is False:
+        # не число и не «НП» — переспрашиваем, а не пишем мусор в реестр
+        bot.send_message(message.chat.id, t(uid, "moto_bad"),
+                         reply_markup=moto_markup(uid))
+        return
+    state.update({"moto": message.text.strip(), "step": "parts"})
     set_state(uid, state)
     ask_parts(message.chat.id, uid, None, state)
 
@@ -1796,7 +1738,7 @@ def handle_fio(message):
         return
     state.update({
         "fio":  message.text,
-        "date": datetime.now().strftime("%d.%m.%Y"),
+        "date": local_now().strftime("%d.%m.%Y"),
         "step": "final_confirm",
     })
     set_state(uid, state)
@@ -1849,7 +1791,7 @@ def show_final_confirm(chat_id, user_id, state):
 
 
 # ══════════════════════════════════════════════════════════════════
-# ФИНАЛ: ОТПРАВКА В GOOGLE SHEETS
+# ФИНАЛ: ОТПРАВКА В РЕЕСТР ТО ПЛАТФОРМЫ
 # ══════════════════════════════════════════════════════════════════
 @bot.callback_query_handler(func=lambda c: c.data.startswith("final:"))
 def cb_final(call):
@@ -1889,7 +1831,7 @@ def cb_final(call):
             say_expired(call.message.chat.id, uid, call.message.message_id)
         return
 
-    # Защита от двойного нажатия, пока идёт запрос к Google.
+    # Защита от двойного нажатия, пока идёт запрос к платформе.
     # Под замком, т.к. telebot обрабатывает обновления в нескольких потоках.
     with _send_lock:
         state = get_state(uid)
@@ -1901,13 +1843,15 @@ def cb_final(call):
         state["sending"] = True
         set_state(uid, state)
         payload = dict(state)      # копия: дальше состояние может быть очищено
+        payload["tg_id"] = uid
+        payload["author"] = who_is(call.from_user)
 
     try:
         bot.edit_message_text(t(uid, "saving"), call.message.chat.id, call.message.message_id)
     except Exception as e:
         logger.warning(f"Не удалось показать «сохраняю»: {e}")
 
-    success, detail = write_to_google_sheets(payload)
+    success, detail = write_record(payload)
 
     if success:
         # Чистим состояние СРАЗУ после успешной записи: если ниже что-то
@@ -1919,7 +1863,7 @@ def cb_final(call):
         try:
             bot.edit_message_text(
                 t(uid, "saved",
-                  sheet=md(detail),
+                  sheet=md(f"{detail['unit']} — {detail['label']}"),
                   date=payload.get("date", ""),
                   equipment=md(payload.get("equipment", "")),
                   wtype=payload.get("work_type", "")),
@@ -1933,6 +1877,14 @@ def cb_final(call):
                                  reply_markup=markup)
             except Exception:
                 pass
+
+        # Платформа записала, но с оговоркой (например, показание ушло в
+        # примечание: у машины не задан счётчик) — говорим об этом прямо
+        if detail.get("warning"):
+            try:
+                bot.send_message(call.message.chat.id, "⚠️ " + detail["warning"])
+            except Exception as e:
+                logger.warning(f"Предупреждение не отправилось: {e}")
 
         # Уведомление менеджеру — всегда по-русски
         if NOTIFY_CHAT_ID:
@@ -1961,7 +1913,7 @@ def cb_final(call):
         markup.add(types.InlineKeyboardButton(t(uid, "btn_retry"), callback_data="final:retry"))
         if detail == "SHEET_GONE":
             text = t(uid, "sheet_gone", title=md(payload.get("equipment", "?")))
-            get_equipment_sheets(force=True)
+            get_equipment_list(force=True)
         else:
             text = t(uid, "save_error", err=cut(detail, 500))
         try:
@@ -2072,20 +2024,14 @@ def handle_unknown(message):
 if __name__ == "__main__":
     logger.info("🤖 Запускаю бота...")
 
-    # Проверка подключения к Google Sheets при старте
+    # Проверка связи с платформой при старте
     try:
-        _ss = get_spreadsheet()
-        _all = [w.title for w in _ss.worksheets()]
-        _eq = [i["display"] for i in get_equipment_sheets(force=True)]
-        logger.info(f"✅ Google Sheets подключён. Таблица: '{_ss.title}'")
-        logger.info(f"   Всего вкладок: {len(_all)} → {_all}")
-        logger.info(f"   Техника в меню ({len(_eq)}): {_eq}")
-        _skipped = [x for x in _all if x.strip() not in _eq]
-        if _skipped:
-            logger.info(f"   Скрыто как служебные: {_skipped}")
+        _eq = get_equipment_list(force=True)
+        logger.info(f"✅ Платформа CIS: {PLATFORM_URL}. Техника в меню: {len(_eq)}")
     except Exception as _e:
-        logger.error(f"❌ Нет подключения к Google Sheets: {_e}")
-        logger.error("   Проверь GOOGLE_CREDENTIALS_JSON и GOOGLE_SHEET_ID")
+        logger.error(f"❌ Нет связи с платформой: {_e}")
+        logger.error("   Проверь PLATFORM_URL и PLATFORM_KEY "
+                     "(ключ — Админ-панель → Интеграции)")
 
     setup_bot_commands()
 
