@@ -29,19 +29,17 @@ remont_bot_5.py — Telegram бот учёта ТО и ремонтов
 4. Диалог, кнопки, языки и уведомление менеджеру — прежние. В реестр
    всё пишется по-русски («ТО»/«Р», «1 день»), как и раньше.
 
-5. ПРОБЕГ ЗА НЕДЕЛЮ (2026-11-18). Кнопка «📏 Пробег за неделю» (/km):
-   бот показывает машины, у которых с понедельника нет показания, и по
-   каждой спрашивает ПОКАЗАНИЯ её счётчиков (одометр, моточасы) — не
-   пробег за неделю: разницу считает платформа. Показания ложатся в ленту
-   счётчиков машины (API /api/v1/equipment-readings) и двигают светофор ТО.
+5. ПРОБЕГ ЗА НЕДЕЛЮ (2026-11-18). Механик вносит ПОКАЗАНИЯ счётчиков
+   (одометр, моточасы), пробег за неделю считает платформа. Ввод — только
+   в форме-таблице: кнопка «📏 Пробег за неделю» в меню открывает страницу
+   платформы /equipment-readings/tg как мини-приложение Telegram — все
+   машины списком, поле на каждый счётчик, одна кнопка «Сохранить».
+   /km и переход из напоминания — сообщение «без показания N из M» с той же
+   кнопкой. Машин по отдельности бот не перечисляет (решение владельца:
+   пошаговый ввод в чате убран). Платформе нужен токен ЭТОГО бота
+   (Админ-панель → Интеграции → «Токен Telegram-бота «ТО и ремонты»»).
    Раз в неделю (MILEAGE_REMIND) бот пишет в чат MILEAGE_CHAT_ID список
    машин без показания с кнопкой «Внести показания».
-   ФОРМА-ТАБЛИЦА (основной путь): кнопка «📏 Пробег за неделю» в меню
-   открывает страницу платформы /equipment-readings/tg как мини-приложение
-   Telegram — все машины списком, поле на каждый счётчик, одна кнопка
-   «Сохранить». Платформе для этого нужен токен ЭТОГО бота (Админ-панель →
-   Интеграции → «Токен Telegram-бота «ТО и ремонты»»). Пошаговый ввод в
-   чате остался запасным: /km.
 
 ═══════════════════════════════════════════════════════════════════
 ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (Railway → Variables)
@@ -286,35 +284,9 @@ T = {
             "Неделя с {monday}. Внесите показания счётчиков (одометр, "
             "моточасы) — пробег за неделю платформа посчитает сама."
         ),
-        "km_pending":     "Без показания за эту неделю: *{n}* из {total}. Выберите машину:",
-        "km_all_list":    "Все машины ({total}). ✅ — показание за неделю уже есть:",
+        "km_pending":     "Без показания за эту неделю: *{n}* из {total}. Откройте форму — там все машины сразу:",
         "km_all_done":    "✅ По всем машинам со счётчиками показания за эту неделю внесены.",
-        "km_btn_all":     "📋 Показать все машины",
-        "km_btn_pending": "⏳ Только без показания",
-        "km_choose_meter": "У машины ещё нет счётчика в платформе. Что показывает её счётчик?",
-        "km_prompt":      "Введите показание: *{meter}*, {unit}",
-        "km_prev":        "_Прошлое: {value} {unit} на {date}_",
-        "km_prev_none":   "_Прошлых показаний нет_",
-        "km_hint":        "_(Число, например: 125 430)_",
-        "km_skip":        "⏭ Пропустить этот счётчик",
-        "km_bad":         "⚠️ Не понял число. Напишите показание цифрами, например: 125 430.",
-        "km_less": (
-            "⚠️ Меньше прошлого показания ({prev} {unit}). Проверьте цифры "
-            "и введите заново. Если счётчик меняли — отметьте замену в "
-            "платформе (Техника → машина → «Внести показание»)."
-        ),
-        "km_confirm":     "Проверьте и нажмите *✅ Записать*:",
-        "km_btn_save":    "✅ Записать",
-        "km_btn_again":   "✏️ Ввести заново",
-        "km_btn_list":    "📋 К списку машин",
-        "km_nothing":     "Ни одного показания не введено — записывать нечего.",
-        "km_saving":      "⏳ Записываю показания в платформу...",
-        "km_saved":       "✅ *Показания записаны в платформу*",
-        "km_delta":       "+{delta} {unit} с {date}",
-        "km_btn_next":    "➡️ Следующая машина",
-        "km_error":       "❌ *Платформа не приняла показания.*\n\n`{err}`",
         "km_list_error":  "❌ Не удалось получить список из платформы:\n`{err}`",
-        "km_cancelled":   "❌ Ввод пробега отменён.",
         "km_remind": (
             "📏 *Пробег за неделю*\n"
             "Пора внести показания счётчиков. Без показания с {monday}: *{n}*"
@@ -323,6 +295,8 @@ T = {
         "km_remind_hint": "Внести — кнопка «📏 Пробег за неделю» в боте.",
         "km_btn_open":    "📏 Внести показания",
         "km_btn_form":    "📝 Открыть форму — все машины",
+        "km_form_private": "Форма открывается в личном чате с ботом — напишите ему /km.",
+        "km_form_off":    "Форма недоступна: адрес платформы (PLATFORM_URL) должен начинаться с https://.",
 
         # ── помощь ──
         "help": (
@@ -515,35 +489,9 @@ T = {
             "{monday} бастап апта. Есептегіш көрсеткіштерін енгізіңіз "
             "(одометр, мотосағат) — апталық жүрісті платформа өзі есептейді."
         ),
-        "km_pending":     "Осы аптада көрсеткіші жоқ: *{n}* / {total}. Техниканы таңдаңыз:",
-        "km_all_list":    "Барлық техника ({total}). ✅ — апталық көрсеткіш бар:",
+        "km_pending":     "Осы аптада көрсеткіші жоқ: *{n}* / {total}. Форманы ашыңыз — онда барлық техника бірден:",
         "km_all_done":    "✅ Есептегіші бар барлық техника бойынша осы аптаның көрсеткіштері енгізілді.",
-        "km_btn_all":     "📋 Барлық техниканы көрсету",
-        "km_btn_pending": "⏳ Тек көрсеткіші жоқтар",
-        "km_choose_meter": "Бұл техниканың платформада әлі есептегіші жоқ. Оның есептегіші нені көрсетеді?",
-        "km_prompt":      "Көрсеткішті енгізіңіз: *{meter}*, {unit}",
-        "km_prev":        "_Алдыңғы: {value} {unit}, {date}_",
-        "km_prev_none":   "_Алдыңғы көрсеткіштер жоқ_",
-        "km_hint":        "_(Сан, мысалы: 125 430)_",
-        "km_skip":        "⏭ Бұл есептегішті өткізу",
-        "km_bad":         "⚠️ Санды түсінбедім. Көрсеткішті цифрмен жазыңыз, мысалы: 125 430.",
-        "km_less": (
-            "⚠️ Алдыңғы көрсеткіштен аз ({prev} {unit}). Цифрларды тексеріп, "
-            "қайта енгізіңіз. Есептегіш ауыстырылса — платформада белгілеңіз "
-            "(Техника → техника → «Көрсеткіш енгізу»)."
-        ),
-        "km_confirm":     "Тексеріп, *✅ Жазу* батырмасын басыңыз:",
-        "km_btn_save":    "✅ Жазу",
-        "km_btn_again":   "✏️ Қайта енгізу",
-        "km_btn_list":    "📋 Техника тізіміне",
-        "km_nothing":     "Бірде-бір көрсеткіш енгізілмеді — жазатын ештеңе жоқ.",
-        "km_saving":      "⏳ Көрсеткіштер платформаға жазылып жатыр...",
-        "km_saved":       "✅ *Көрсеткіштер платформаға жазылды*",
-        "km_delta":       "{date} бастап +{delta} {unit}",
-        "km_btn_next":    "➡️ Келесі техника",
-        "km_error":       "❌ *Платформа көрсеткіштерді қабылдамады.*\n\n`{err}`",
         "km_list_error":  "❌ Платформадан тізімді алу мүмкін болмады:\n`{err}`",
-        "km_cancelled":   "❌ Жүрісті енгізу тоқтатылды.",
         "km_remind": (
             "📏 *Апталық жүріс*\n"
             "Есептегіш көрсеткіштерін енгізу уақыты. {monday} бастап көрсеткіші жоқ: *{n}*"
@@ -552,6 +500,8 @@ T = {
         "km_remind_hint": "Енгізу — боттағы «📏 Апталық жүріс» батырмасы.",
         "km_btn_open":    "📏 Көрсеткіш енгізу",
         "km_btn_form":    "📝 Форманы ашу — барлық техника",
+        "km_form_private": "Форма ботпен жеке чатта ашылады — оған /km деп жазыңыз.",
+        "km_form_off":    "Форма қолжетімсіз: платформа мекенжайы (PLATFORM_URL) https:// деп басталуы керек.",
 
         # ── помощь ──
         "help": (
@@ -2199,15 +2149,6 @@ def _km_last(u) -> str:
         for m in u.get("meters", []) if m.get("value") is not None)
 
 
-def _km_label(u) -> str:
-    vals = ", ".join(f"{fmt_num(m['value'])} {m['unit']}"
-                     for m in u.get("meters", []) if m.get("value") is not None)
-    label = ("✅ " if u.get("done") else "") + u["title"]
-    if vals:
-        label += " — " + vals
-    return label if len(label) <= 60 else label[:57] + "..."
-
-
 def _km_show(chat_id, text, edit_msg_id=None, markup=None):
     """Перерисовать сообщение, а если нельзя — прислать новое."""
     if edit_msg_id:
@@ -2222,52 +2163,23 @@ def _km_show(chat_id, text, edit_msg_id=None, markup=None):
     bot.send_message(chat_id, text, parse_mode="Markdown", reply_markup=markup)
 
 
-def show_mileage_list(chat_id, user_id, edit_msg_id=None, page=0,
-                      show_all=False, note=None):
+def show_mileage_list(chat_id, user_id, edit_msg_id=None, note=None):
+    """«Пробег за неделю»: сколько машин без показания и ОДНА кнопка —
+    форма-таблица платформы. Машин по отдельности бот не перечисляет и
+    пошагово не спрашивает (решение владельца 2026-11-18: «убери ссылки на
+    все техники по отдельности… оставь только кнопку минисайта») — всё
+    вводится в форме, где видны все машины разом."""
     qa_mode_users.discard(user_id)
+    clear_state(user_id)
     try:
         data = get_readings()
     except Exception as e:
         logger.error(f"Пробег: список не получен: {e}")
-        clear_state(user_id)
         _km_show(chat_id, t(user_id, "km_list_error", err=_tick(e)), edit_msg_id)
         return
-    set_state(user_id, {"step": "km_list", "page": page, "all": show_all})
 
     pending = km_pending(data)
-    items = data["units"] if show_all else pending
-    total_pages = max(1, (len(items) + PAGE_SIZE - 1) // PAGE_SIZE)
-    page = max(0, min(page, total_pages - 1))
-    chunk = items[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
-
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    if form_app() and int(chat_id) > 0:   # мини-приложение — только в личке
-        markup.add(types.InlineKeyboardButton(t(user_id, "km_btn_form"),
-                                              web_app=form_app()))
-    for u in chunk:
-        markup.add(types.InlineKeyboardButton(_km_label(u),
-                                              callback_data=f"km:{u['code']}"))
-    if total_pages > 1:
-        nav = []
-        if page > 0:
-            nav.append(types.InlineKeyboardButton(
-                t(user_id, "prev_page"), callback_data=f"kmpage:{page - 1}"))
-        if page < total_pages - 1:
-            nav.append(types.InlineKeyboardButton(
-                t(user_id, "next_page"), callback_data=f"kmpage:{page + 1}"))
-        markup.row(*nav)
-    if show_all:
-        markup.add(types.InlineKeyboardButton(t(user_id, "km_btn_pending"),
-                                              callback_data="kmall:0"))
-    else:
-        markup.add(types.InlineKeyboardButton(t(user_id, "km_btn_all"),
-                                              callback_data="kmall:1"))
-    markup.add(types.InlineKeyboardButton(t(user_id, "cancel"),
-                                          callback_data="kmcancel"))
-
-    if show_all:
-        what = t(user_id, "km_all_list", total=len(items))
-    elif pending:
+    if pending:
         what = t(user_id, "km_pending", n=len(pending),
                  total=len([u for u in data["units"] if u.get("meters")]))
     else:
@@ -2275,284 +2187,26 @@ def show_mileage_list(chat_id, user_id, edit_msg_id=None, page=0,
     text = (f"{t(user_id, 'km_title')}\n"
             f"{t(user_id, 'km_week', monday=_ru_date(data.get('week_start')))}"
             f"\n\n{what}")
-    if total_pages > 1:
-        text += f"\n_{t(user_id, 'page_nav', cur=page + 1, total=total_pages)}_"
+    markup = None
+    if form_app() and int(chat_id) > 0:      # мини-приложение — только в личке
+        markup = types.InlineKeyboardMarkup()
+        markup.add(types.InlineKeyboardButton(t(user_id, "km_btn_form"),
+                                              web_app=form_app()))
+    else:
+        text += "\n\n" + t(user_id, "km_form_private" if form_app()
+                           else "km_form_off")
     if note:
         text = f"{note}\n\n{text}"
     _km_show(chat_id, text, edit_msg_id, markup)
 
 
-@bot.callback_query_handler(func=lambda c: c.data.startswith("kmpage:"))
-def cb_km_page(call):
-    ack(call)
-    state = get_state(call.from_user.id)
-    show_mileage_list(call.message.chat.id, call.from_user.id,
-                      call.message.message_id,
-                      page=int(call.data.split(":", 1)[1]),
-                      show_all=bool(state.get("all")))
-
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("kmall:"))
-def cb_km_all(call):
+@bot.callback_query_handler(func=lambda c: c.data.startswith("km"))
+def cb_km_old(call):
+    """Кнопки прежнего пошагового ввода (km:B1, kmsave, kmnext…) в старых
+    сообщениях чата — ведут к форме, а не молчат."""
     ack(call)
     show_mileage_list(call.message.chat.id, call.from_user.id,
-                      call.message.message_id,
-                      show_all=call.data == "kmall:1")
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "kmlist")
-def cb_km_list(call):
-    ack(call)
-    state = get_state(call.from_user.id)
-    show_mileage_list(call.message.chat.id, call.from_user.id,
-                      call.message.message_id, page=state.get("page", 0),
-                      show_all=bool(state.get("all")))
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "kmcancel")
-def cb_km_cancel(call):
-    ack(call)
-    uid = call.from_user.id
-    clear_state(uid)
-    _km_show(call.message.chat.id, t(uid, "km_cancelled"),
-             call.message.message_id)
-
-
-def open_km_unit(chat_id, user_id, edit_msg_id, code):
-    """Начать ввод по машине: спросить её счётчики по очереди."""
-    prev = get_state(user_id)
-    try:
-        data = get_readings()
-    except Exception as e:
-        _km_show(chat_id, t(user_id, "km_list_error", err=_tick(e)), edit_msg_id)
-        return
-    unit = next((u for u in data["units"] if u["code"] == code), None)
-    if unit is None:
-        show_mileage_list(chat_id, user_id, edit_msg_id,
-                          note=t(user_id, "eq_gone"))
-        return
-    state = {"step": "km_value", "code": code, "title": unit["title"],
-             "meters": [dict(m) for m in unit["meters"]], "idx": 0,
-             "values": {}, "page": prev.get("page", 0),
-             "all": prev.get("all", False)}
-    if not state["meters"]:
-        # у машины ещё нет счётчика — пусть механик скажет, какой он
-        state.update(step="km_meter", choices=data.get("meter_choices") or [])
-        set_state(user_id, state)
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        for c in state["choices"]:
-            markup.add(types.InlineKeyboardButton(
-                f"{c['title']}, {c['unit']}", callback_data=f"kmm:{c['code']}"))
-        markup.add(types.InlineKeyboardButton(t(user_id, "km_btn_list"),
-                                              callback_data="kmlist"))
-        _km_show(chat_id, f"{t(user_id, 'km_title')}\n🔧 *{md(unit['title'])}*"
-                          f"\n\n{t(user_id, 'km_choose_meter')}",
-                 edit_msg_id, markup)
-        return
-    set_state(user_id, state)
-    ask_km_value(chat_id, user_id, edit_msg_id, state)
-
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("km:"))
-def cb_km_unit(call):
-    ack(call)
-    open_km_unit(call.message.chat.id, call.from_user.id,
-                 call.message.message_id, call.data.split(":", 1)[1])
-
-
-@bot.callback_query_handler(func=lambda c: c.data.startswith("kmm:"))
-def cb_km_meter(call):
-    ack(call)
-    uid = call.from_user.id
-    state = get_state(uid)
-    choice = next((c for c in state.get("choices", [])
-                   if c["code"] == call.data.split(":", 1)[1]), None)
-    if state.get("step") != "km_meter" or choice is None:
-        show_mileage_list(call.message.chat.id, uid, call.message.message_id)
-        return
-    state.update(step="km_value", idx=0, meters=[dict(
-        choice, value=None, date=None, this_week=False)])
-    set_state(uid, state)
-    ask_km_value(call.message.chat.id, uid, call.message.message_id, state)
-
-
-def _km_entered(state):
-    """Строки «✅ Моточасы ДВС: 1 000 м/ч» по уже введённым счётчикам."""
-    return [f"✅ {m['title']}: *{fmt_num(state['values'][m['code']])}* {m['unit']}"
-            for m in state["meters"] if m["code"] in state["values"]]
-
-
-def km_markup(user_id):
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton(t(user_id, "km_skip"), callback_data="kmskip"),
-        types.InlineKeyboardButton(t(user_id, "km_btn_list"), callback_data="kmlist"),
-    )
-    return markup
-
-
-def ask_km_value(chat_id, user_id, edit_msg_id, state):
-    m = state["meters"][state["idx"]]
-    lines = [t(user_id, "km_title"), f"🔧 *{md(state['title'])}*", ""]
-    lines += _km_entered(state)
-    lines.append(t(user_id, "km_prompt", meter=m["title"], unit=m["unit"]))
-    if m.get("value") is not None:
-        lines.append(t(user_id, "km_prev", value=fmt_num(m["value"]),
-                       unit=m["unit"], date=_ru_date(m.get("date"))))
-    else:
-        lines.append(t(user_id, "km_prev_none"))
-    lines.append(t(user_id, "km_hint"))
-    _km_show(chat_id, "\n".join(lines), edit_msg_id, km_markup(user_id))
-
-
-def km_next_meter(chat_id, user_id, edit_msg_id, state):
-    state["idx"] += 1
-    set_state(user_id, state)
-    if state["idx"] < len(state["meters"]):
-        ask_km_value(chat_id, user_id, edit_msg_id, state)
-    else:
-        show_km_confirm(chat_id, user_id, edit_msg_id, state)
-
-
-@bot.message_handler(func=lambda m: get_state(m.from_user.id).get("step") == "km_value")
-def handle_km_value(message):
-    uid = message.from_user.id
-    state = get_state(uid)
-    if not state.get("meters") or state.get("idx", 0) >= len(state["meters"]):
-        show_mileage_list(message.chat.id, uid)
-        return
-    m = state["meters"][state["idx"]]
-    value = parse_moto(message.text)
-    if value is None:                 # «нет» / «НП» — как «пропустить»
-        km_next_meter(message.chat.id, uid, None, state)
-        return
-    if value is False:
-        bot.send_message(message.chat.id, t(uid, "km_bad"),
-                         reply_markup=km_markup(uid))
-        return
-    if m.get("value") is not None and value < float(m["value"]):
-        # платформа всё равно не примет — говорим сразу, а не после ввода всех
-        bot.send_message(message.chat.id,
-                         t(uid, "km_less", prev=fmt_num(m["value"]),
-                           unit=m["unit"]),
-                         reply_markup=km_markup(uid))
-        return
-    state["values"][m["code"]] = value
-    km_next_meter(message.chat.id, uid, None, state)
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "kmskip")
-def cb_km_skip(call):
-    ack(call)
-    uid = call.from_user.id
-    state = get_state(uid)
-    if state.get("step") != "km_value" or not state.get("meters"):
-        show_mileage_list(call.message.chat.id, uid, call.message.message_id)
-        return
-    km_next_meter(call.message.chat.id, uid, call.message.message_id, state)
-
-
-def show_km_confirm(chat_id, user_id, edit_msg_id, state):
-    state["step"] = "km_confirm"
-    set_state(user_id, state)
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    lines = [t(user_id, "km_title"), f"🔧 *{md(state['title'])}*", ""]
-    if not state["values"]:
-        lines.append(t(user_id, "km_nothing"))
-    else:
-        for m in state["meters"]:
-            if m["code"] not in state["values"]:
-                continue
-            value = state["values"][m["code"]]
-            line = f"• {m['title']}: *{fmt_num(value)}* {m['unit']}"
-            if m.get("value") is not None:
-                line += "  (" + t(user_id, "km_delta",
-                                  delta=fmt_num(value - float(m["value"])),
-                                  unit=m["unit"],
-                                  date=_ru_date(m.get("date"))) + ")"
-            lines.append(line)
-        lines += ["", t(user_id, "km_confirm")]
-        markup.add(types.InlineKeyboardButton(t(user_id, "km_btn_save"),
-                                              callback_data="kmsave"))
-    markup.add(
-        types.InlineKeyboardButton(t(user_id, "km_btn_again"),
-                                   callback_data=f"km:{state['code']}"),
-        types.InlineKeyboardButton(t(user_id, "km_btn_list"),
-                                   callback_data="kmlist"),
-    )
-    _km_show(chat_id, "\n".join(lines), edit_msg_id, markup)
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "kmsave")
-def cb_km_save(call):
-    ack(call)
-    uid, cid, mid = call.from_user.id, call.message.chat.id, call.message.message_id
-    with _send_lock:                  # два быстрых нажатия — одна запись
-        state = get_state(uid)
-        if state.get("step") == "km_done":
-            bot.send_message(cid, t(uid, "already_done"), parse_mode="Markdown")
-            return
-        if state.get("step") != "km_confirm" or not state.get("values"):
-            show_mileage_list(cid, uid, mid)
-            return
-        _km_show(cid, t(uid, "km_saving"), mid)
-        body = {"readings": state["values"], "tg_id": uid,
-                "author": who_is(call.from_user)}
-        try:
-            res = platform("POST", "/" + quote(state["code"], safe=""),
-                           api=READINGS_API, json=body)
-        except PlatformError as e:
-            logger.error(f"Пробег: платформа не приняла {state['code']}: {e}")
-            if e.status == 404:
-                show_mileage_list(cid, uid, mid, note=t(uid, "eq_gone"))
-                return
-            markup = types.InlineKeyboardMarkup(row_width=1)
-            markup.add(
-                types.InlineKeyboardButton(t(uid, "btn_retry"), callback_data="kmsave"),
-                types.InlineKeyboardButton(t(uid, "km_btn_again"),
-                                           callback_data=f"km:{state['code']}"),
-                types.InlineKeyboardButton(t(uid, "km_btn_list"), callback_data="kmlist"),
-            )
-            _km_show(cid, t(uid, "km_error", err=_tick(e)), mid, markup)
-            return
-        state["step"] = "km_done"
-        set_state(uid, state)
-
-    lines = [t(uid, "km_saved"), f"🔧 *{md(state['title'])}*", ""]
-    for s in res.get("saved") or []:
-        line = f"• {s['title']}: *{fmt_num(s['value'])}* {s['unit']}"
-        if s.get("delta") is not None:
-            line += "  (" + t(uid, "km_delta", delta=fmt_num(s["delta"]),
-                              unit=s["unit"],
-                              date=_ru_date(s.get("prev_date"))) + ")"
-        lines.append(line)
-    logger.info(f"✅ Пробег: {state['code']} — {state['values']}")
-    markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton(t(uid, "km_btn_next"), callback_data="kmnext"),
-        types.InlineKeyboardButton(t(uid, "km_btn_list"), callback_data="kmlist"),
-    )
-    _km_show(cid, "\n".join(lines), mid, markup)
-
-
-@bot.callback_query_handler(func=lambda c: c.data == "kmnext")
-def cb_km_next(call):
-    """Следующая машина без показания за неделю — сразу к вводу."""
-    ack(call)
-    uid = call.from_user.id
-    done_code = get_state(uid).get("code")
-    try:
-        data = get_readings()
-    except Exception as e:
-        _km_show(call.message.chat.id, t(uid, "km_list_error", err=_tick(e)),
-                 call.message.message_id)
-        return
-    nxt = next((u for u in km_pending(data) if u["code"] != done_code), None)
-    if nxt is None:
-        show_mileage_list(call.message.chat.id, uid, call.message.message_id)
-        return
-    open_km_unit(call.message.chat.id, uid, call.message.message_id, nxt["code"])
-
+                      call.message.message_id)
 
 # ── еженедельное напоминание ─────────────────────────────────────
 DAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6,
