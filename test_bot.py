@@ -756,6 +756,47 @@ check("переход по кнопке из напоминания открыв
       "Пробег за неделю" in last() and B.get_state(UID).get("step") == "km_list",
       last()[:80])
 
+# ── ТЕСТ 19: старт во время выкатки (две копии бота) ─────────────
+print("\n[19] Старт: Telegram 409 от прошлой копии бота не роняет процесс")
+from telebot.apihelper import ApiTelegramException
+
+
+def tg_error(code):
+    return ApiTelegramException(
+        "getUpdates", pytypes.SimpleNamespace(status_code=code, reason="x"),
+        {"error_code": code, "description": "Conflict: terminated by other "
+                                            "getUpdates request"})
+
+
+starts, pauses = [], []
+
+
+def fake_polling(**kw):
+    starts.append(kw)
+    if len(starts) <= 2:
+        raise tg_error(409)
+
+
+B.bot.infinity_polling = fake_polling
+B.run_polling(sleep=pauses.append)
+check("после двух 409 бот всё-таки запустился",
+      len(starts) == 3 and pauses == [5, 5], (len(starts), pauses))
+check("непропущенные сообщения по-прежнему пропускаются",
+      all(s.get("skip_pending") for s in starts))
+
+
+def fake_401(**kw):
+    raise tg_error(401)
+
+
+B.bot.infinity_polling = fake_401
+try:
+    B.run_polling(sleep=pauses.append)
+    check("другая ошибка Telegram не глушится", False)
+except ApiTelegramException as e:
+    check("другая ошибка Telegram не глушится (неверный токен и т.п.)",
+          e.error_code == 401)
+
 # ── Итог ──────────────────────────────────────────────────────────
 print("\n" + "═" * 60)
 if FAILS:
