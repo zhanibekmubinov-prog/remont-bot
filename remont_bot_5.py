@@ -36,6 +36,12 @@ remont_bot_5.py — Telegram бот учёта ТО и ремонтов
    счётчиков машины (API /api/v1/equipment-readings) и двигают светофор ТО.
    Раз в неделю (MILEAGE_REMIND) бот пишет в чат MILEAGE_CHAT_ID список
    машин без показания с кнопкой «Внести показания».
+   ФОРМА-ТАБЛИЦА (основной путь): кнопка «📏 Пробег за неделю» в меню
+   открывает страницу платформы /equipment-readings/tg как мини-приложение
+   Telegram — все машины списком, поле на каждый счётчик, одна кнопка
+   «Сохранить». Платформе для этого нужен токен ЭТОГО бота (Админ-панель →
+   Интеграции → «Токен Telegram-бота «ТО и ремонты»»). Пошаговый ввод в
+   чате остался запасным: /km.
 
 ═══════════════════════════════════════════════════════════════════
 ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ (Railway → Variables)
@@ -316,6 +322,7 @@ T = {
         "km_remind_more": "… и ещё {n}",
         "km_remind_hint": "Внести — кнопка «📏 Пробег за неделю» в боте.",
         "km_btn_open":    "📏 Внести показания",
+        "km_btn_form":    "📝 Открыть форму — все машины",
 
         # ── помощь ──
         "help": (
@@ -544,6 +551,7 @@ T = {
         "km_remind_more": "… тағы {n}",
         "km_remind_hint": "Енгізу — боттағы «📏 Апталық жүріс» батырмасы.",
         "km_btn_open":    "📏 Көрсеткіш енгізу",
+        "km_btn_form":    "📝 Форманы ашу — барлық техника",
 
         # ── помощь ──
         "help": (
@@ -638,6 +646,15 @@ def md(text) -> str:
 # ══════════════════════════════════════════════════════════════════
 SERVICE_API = "/api/v1/equipment-service"
 READINGS_API = "/api/v1/equipment-readings"    # пробег за неделю
+# Форма-таблица пробега — мини-приложение Telegram на странице платформы.
+# Telegram открывает мини-приложения только по https: на http (локальный
+# запуск) кнопки формы нет, остаётся пошаговый ввод.
+FORM_URL = (PLATFORM_URL + "/equipment-readings/tg"
+            if PLATFORM_URL.startswith("https://") else None)
+
+
+def form_app():
+    return types.WebAppInfo(FORM_URL) if FORM_URL else None
 
 
 class PlatformError(Exception):
@@ -1202,8 +1219,10 @@ def get_main_menu_keyboard(user_id):
         types.KeyboardButton(t(user_id, "btn_new")),
         types.KeyboardButton(t(user_id, "btn_ask")),
     )
+    # «Пробег за неделю» сразу открывает форму-таблицу (мини-приложение);
+    # без https — обычная кнопка пошагового ввода
     markup.row(
-        types.KeyboardButton(t(user_id, "btn_km")),
+        types.KeyboardButton(t(user_id, "btn_km"), web_app=form_app()),
         types.KeyboardButton(t(user_id, "btn_lang")),
     )
     return markup
@@ -2222,6 +2241,9 @@ def show_mileage_list(chat_id, user_id, edit_msg_id=None, page=0,
     chunk = items[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
 
     markup = types.InlineKeyboardMarkup(row_width=1)
+    if form_app() and int(chat_id) > 0:   # мини-приложение — только в личке
+        markup.add(types.InlineKeyboardButton(t(user_id, "km_btn_form"),
+                                              web_app=form_app()))
     for u in chunk:
         markup.add(types.InlineKeyboardButton(_km_label(u),
                                               callback_data=f"km:{u['code']}"))
