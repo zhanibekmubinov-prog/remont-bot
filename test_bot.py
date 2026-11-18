@@ -629,6 +629,12 @@ mk = B.get_main_menu_keyboard(UID)
 menu = [(b if isinstance(b, dict) else b.__dict__).get("text")
         for row in mk.keyboard for b in row]
 check("в нижнем меню есть «Пробег за неделю»", "📏 Пробег за неделю" in menu, menu)
+km_btn = [(b if isinstance(b, dict) else b.to_dict())
+          for row in mk.keyboard for b in row
+          if (b if isinstance(b, dict) else b.__dict__).get("text") == "📏 Пробег за неделю"][0]
+check("кнопка меню сразу открывает форму-таблицу платформы",
+      km_btn.get("web_app", {}).get("url")
+      == "https://platform.test/equipment-readings/tg", km_btn)
 
 SENT.clear()
 B.clear_state(UID)
@@ -638,6 +644,11 @@ check("кнопка пробега выводит из режима вопрос
 check("в списке — машины без показания за неделю: 2 из 2",
       "Без показания за эту неделю: *2* из 2" in last(), last()[:200])
 check("неделя с понедельника", "Неделя с 16.11.2026" in last())
+first = SENT[-1]["markup"].keyboard[0][0]
+check("первой кнопкой списка — форма-таблица",
+      getattr(first, "web_app", None) is not None
+      and first.web_app.url == "https://platform.test/equipment-readings/tg",
+      first.__dict__)
 check("кнопки B1 и J1, без машин без счётчика",
       "km:B1" in km_buttons() and "km:J1" in km_buttons()
       and "km:N1" not in km_buttons(), km_buttons())
