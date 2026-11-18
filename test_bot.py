@@ -624,7 +624,9 @@ def km_buttons():
     return [b[1] for b in buttons()]
 
 
-print("\n[17] Пробег за неделю: список, ввод, запись")
+FORM = "https://platform.test/equipment-readings/tg"
+
+print("\n[17] Пробег за неделю: только кнопка формы")
 mk = B.get_main_menu_keyboard(UID)
 menu = [(b if isinstance(b, dict) else b.__dict__).get("text")
         for row in mk.keyboard for b in row]
@@ -633,89 +635,42 @@ km_btn = [(b if isinstance(b, dict) else b.to_dict())
           for row in mk.keyboard for b in row
           if (b if isinstance(b, dict) else b.__dict__).get("text") == "📏 Пробег за неделю"][0]
 check("кнопка меню сразу открывает форму-таблицу платформы",
-      km_btn.get("web_app", {}).get("url")
-      == "https://platform.test/equipment-readings/tg", km_btn)
+      km_btn.get("web_app", {}).get("url") == FORM, km_btn)
 
 SENT.clear()
-B.clear_state(UID)
+B.set_state(UID, {"step": "km_value", "code": "B1"})     # остаток старого диалога
 B.qa_mode_users.add(UID)
 B.btn_km_handler(msg("📏 Пробег за неделю"))
 check("кнопка пробега выводит из режима вопросов", UID not in B.qa_mode_users)
-check("в списке — машины без показания за неделю: 2 из 2",
+check("состояние прежнего пошагового ввода сброшено", B.get_state(UID) == {})
+check("сколько машин без показания: 2 из 2",
       "Без показания за эту неделю: *2* из 2" in last(), last()[:200])
 check("неделя с понедельника", "Неделя с 16.11.2026" in last())
-first = SENT[-1]["markup"].keyboard[0][0]
-check("первой кнопкой списка — форма-таблица",
-      getattr(first, "web_app", None) is not None
-      and first.web_app.url == "https://platform.test/equipment-readings/tg",
-      first.__dict__)
-check("кнопки B1 и J1, без машин без счётчика",
-      "km:B1" in km_buttons() and "km:J1" in km_buttons()
-      and "km:N1" not in km_buttons(), km_buttons())
+rows = SENT[-1]["markup"].keyboard
+check("в сообщении одна кнопка — форма-таблица",
+      len(rows) == 1 and len(rows[0]) == 1
+      and getattr(rows[0][0], "web_app", None) is not None
+      and rows[0][0].web_app.url == FORM, [r[0].__dict__ for r in rows])
+check("машин по отдельности в боте нет",
+      not any(d and d.startswith("km") for _, d in buttons()), buttons())
 
-B.cb_km_unit(cb("km:B1"))
-check("спрашивает моточасы ДВС B1", "*Моточасы ДВС*, м/ч" in last(), last())
-check("показывает прошлое показание", "Прошлое: 600 м/ч на 08.11.2026" in last())
+SENT.clear()
+B.cb_km_old(cb("km:B1", mid=4242))
+check("кнопка прежнего пошагового ввода в старом сообщении ведёт к форме",
+      SENT[-1]["markup"].keyboard[0][0].web_app.url == FORM
+      and SENT[-1]["id"] == 4242, SENT[-1])
 
-B.handle_km_value(msg("500"))
-check("меньше прошлого — переспрашивает", "Меньше прошлого показания (600 м/ч)" in last())
-B.handle_km_value(msg("много"))
-check("не число — переспрашивает", "Не понял число" in last())
-check("после ошибок всё ещё ждём показание", B.get_state(UID)["step"] == "km_value")
+SENT.clear()
+B.show_mileage_list(-100777, UID)
+check("в группе — без кнопки, с подсказкой про личный чат",
+      SENT[-1]["markup"] is None and "личном чате" in last(), last())
 
-B.handle_km_value(msg("1 000,5"))
-check("итог: показание и пробег за неделю",
-      "*1 000,5* м/ч" in last() and "+400,5 м/ч с 08.11.2026" in last(), last())
-check("есть кнопка «Записать»", "kmsave" in km_buttons())
-
-B.cb_km_save(cb("kmsave"))
-check("в платформу ушло одно показание по B1",
-      KM_POSTS == [("B1", {"readings": {"engine_h": 1000.5}, "tg_id": UID,
-                           "author": "Асхат (@ash)"})], KM_POSTS)
-check("ответ: записано, с пробегом за неделю",
-      "Показания записаны" in last() and "+400,5 м/ч с 08.11.2026" in last(),
-      last())
-B.cb_km_save(cb("kmsave"))
-check("повторное нажатие не пишет второй раз", len(KM_POSTS) == 1)
-check("…и говорит, что уже сохранено", "уже сохранена" in last())
-
-B.cb_km_next(cb("kmnext"))
-check("«Следующая машина» — сразу J1, одометр",
-      B.get_state(UID).get("code") == "J1" and "*Пробег*, км" in last(), last())
-B.cb_km_skip(cb("kmskip"))
-check("всё пропущено — записывать нечего, кнопки «Записать» нет",
-      "записывать нечего" in last() and "kmsave" not in km_buttons())
-
-B.cb_km_unit(cb("km:J1"))
-B.handle_km_value(msg("126 500 км"))
-KM["fail"] = "Пробег: Дата показания в будущем."
-B.cb_km_save(cb("kmsave"))
-check("отказ платформы показан, можно повторить",
-      "не приняла показания" in last() and "kmsave" in km_buttons(), last())
-check("введённое не потеряно", B.get_state(UID)["values"] == {"km": 126500.0})
-KM["fail"] = None
-B.cb_km_save(cb("kmsave"))
-check("повтор записал J1", KM_POSTS[-1][0] == "J1"
-      and KM_POSTS[-1][1]["readings"] == {"km": 126500.0}, KM_POSTS[-1])
-
-B.cb_km_list(cb("kmlist"))
-check("все показания за неделю внесены", "показания за эту неделю внесены" in last(),
-      last())
-
-B.cb_km_all(cb("kmall:1"))
-check("«Все машины» — с отметкой ✅", any(
-    b[0].startswith("✅ B1") for b in buttons()), buttons()[:3])
-B.cb_km_unit(cb("km:N1"))
-check("у машины без счётчика — выбор счётчика",
-      "kmm:km" in km_buttons() and "ещё нет счётчика" in last(), last())
-B.cb_km_meter(cb("kmm:km"))
-check("после выбора — спрашивает пробег", "*Пробег*, км" in last()
-      and "Прошлых показаний нет" in last(), last())
-B.handle_km_value(msg("5000"))
-B.cb_km_save(cb("kmsave"))
-check("первое показание N1 записано",
-      KM_POSTS[-1] == ("N1", {"readings": {"km": 5000.0}, "tg_id": UID,
-                              "author": "Асхат (@ash)"}), KM_POSTS[-1])
+KM_DONE.update({"B1", "J1"})
+B.show_mileage_list(CHAT, UID)
+check("всё внесено — так и написано, кнопка формы остаётся",
+      "показания за эту неделю внесены" in last()
+      and SENT[-1]["markup"].keyboard[0][0].web_app.url == FORM, last())
+KM_DONE.clear()
 
 check("числа: 125430 → «125 430», 0.5 → «0,5»",
       B.fmt_num(125430) == "125 430" and B.fmt_num(0.5) == "0,5"
@@ -726,7 +681,6 @@ print("\n[18] Пробег: еженедельное напоминание")
 check("расписание: понятное — берётся, мусор — пропускается",
       B.parse_remind("mon 09:00, пт 15:30, xx 10:00, mon 25:00")
       == [(0, 9, 0), (4, 15, 30)], B.parse_remind("mon 09:00, пт 15:30"))
-KM_DONE.clear()                      # новая неделя — долги снова у всех
 B.MILEAGE_CHAT_ID = "-100555"
 B.MILEAGE_REMIND = [(0, 9, 0)]
 B.bot.get_me = lambda: pytypes.SimpleNamespace(username="remont_test_bot")
@@ -734,27 +688,27 @@ SENT.clear()
 mon = _dt(2026, 11, 16, 9, 0, 30)
 check("в понедельник 09:00 напоминание уходит", B.km_reminder_tick(mon) is True)
 check("в нужный чат и со списком машин",
-      SENT[-1]["chat"] == "-100555" and "Без показания с 16.11.2026: *3*" in last()
-      and "B1 · Насосная установка · 882AHDE — 1 000,5 м/ч (18.11.2026)" in last(),
+      SENT[-1]["chat"] == "-100555" and "Без показания с 16.11.2026: *2*" in last()
+      and "B1 · Насосная установка · 882AHDE — 600 м/ч (08.11.2026)" in last(),
       last())
 btn = SENT[-1]["markup"].keyboard[0][0]
 url = (btn if isinstance(btn, dict) else btn.__dict__).get("url")
-check("кнопка ведёт в бота на ввод пробега",
+check("кнопка ведёт в бота к форме пробега",
       url == "https://t.me/remont_test_bot?start=km", url)
 check("в ту же минуту второй раз не уходит", B.km_reminder_tick(mon) is False)
 check("в другое время не уходит",
       B.km_reminder_tick(_dt(2026, 11, 16, 9, 1)) is False
       and B.km_reminder_tick(_dt(2026, 11, 17, 9, 0)) is False)
-KM_DONE.update({"B1", "J1", "N1"})
+KM_DONE.update({"B1", "J1"})
 n = len(SENT)
 check("долгов нет — напоминание не шлётся",
       B.km_reminder_tick(_dt(2026, 11, 23, 9, 0)) is True and len(SENT) == n)
 
 SENT.clear()
 B.cmd_start(msg("/start km"))
-check("переход по кнопке из напоминания открывает пробег",
-      "Пробег за неделю" in last() and B.get_state(UID).get("step") == "km_list",
-      last()[:80])
+check("переход по кнопке из напоминания — сообщение с кнопкой формы",
+      "Пробег за неделю" in last()
+      and SENT[-1]["markup"].keyboard[0][0].web_app.url == FORM, last()[:80])
 
 # ── ТЕСТ 19: старт во время выкатки (две копии бота) ─────────────
 print("\n[19] Старт: Telegram 409 от прошлой копии бота не роняет процесс")
