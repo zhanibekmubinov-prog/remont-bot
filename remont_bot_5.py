@@ -2663,6 +2663,32 @@ def handle_unknown(message):
 # ══════════════════════════════════════════════════════════════════
 # ЗАПУСК
 # ══════════════════════════════════════════════════════════════════
+# Railway при выкатке несколько секунд держит ДВЕ копии бота: новая уже
+# стартовала, старая ещё опрашивает Telegram. На первом же getUpdates
+# (skip_pending) Telegram отвечает новой 409 «terminated by other getUpdates
+# request» — а этот запрос telebot делает ДО своего цикла переподключений,
+# ошибку никто не ловил, процесс падал, и Railway помечал выкатку «failed»
+# (2026-11-18, выкатка формы пробега). Ждём, пока старая копия уйдёт.
+START_409_RETRIES = 24          # по 5 секунд — до двух минут
+START_409_PAUSE = 5
+
+
+def run_polling(sleep=time.sleep):
+    from telebot.apihelper import ApiTelegramException
+    for attempt in range(1, START_409_RETRIES + 1):
+        try:
+            bot.infinity_polling(skip_pending=True, none_stop=True, interval=1)
+            return
+        except ApiTelegramException as e:
+            if e.error_code != 409 or attempt == START_409_RETRIES:
+                raise
+            logger.warning(
+                f"Telegram 409: ещё работает прошлая копия бота (идёт "
+                f"выкатка) — повтор через {START_409_PAUSE} с "
+                f"({attempt}/{START_409_RETRIES})")
+            sleep(START_409_PAUSE)
+
+
 if __name__ == "__main__":
     logger.info("🤖 Запускаю бота...")
 
@@ -2679,4 +2705,4 @@ if __name__ == "__main__":
     start_km_reminder()
 
     logger.info(f"✅ Бот готов. Язык по умолчанию: {DEFAULT_LANG}")
-    bot.infinity_polling(skip_pending=True, none_stop=True, interval=1)
+    run_polling()
