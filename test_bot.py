@@ -64,6 +64,8 @@ PLATFORM = {"fail": None, "warning": None}
 
 
 def fake_platform(method, path="", **kw):
+    if kw.get("api") == B.READINGS_API:          # пробег за неделю
+        return fake_readings(method, path, kw)
     CALLS.append((method, path, kw.get("params")))
     params = kw.get("params") or {}
     if path == "" and method == "GET":
@@ -561,6 +563,187 @@ B.handle_qa_question(msg("Когда чинили насос 883?"))
 check("режим вопросов отвечает", "AI отвечает" in last())
 check("для вопроса прочитана история B3", ("GET", "/B3/history", {"limit": 40}) in CALLS)
 check("после ответа режим сброшен", UID not in B.qa_mode_users)
+
+# ── ТЕСТ 17: пробег за неделю ─────────────────────────────────────
+# Заглушка API показаний: у B1 — моточасы, у J1 — одометр, у остальных
+# счётчиков нет. KM_DONE — у кого показание с понедельника уже есть.
+from datetime import datetime as _dt
+
+KM_METERS = {
+    "B1": [{"code": "engine_h", "title": "Моточасы ДВС", "unit": "м/ч",
+            "value": 600, "date": "2026-11-08"}],
+    "J1": [{"code": "km", "title": "Пробег", "unit": "км",
+            "value": 125000, "date": "2026-11-09"}],
+}
+KM_DONE = set()
+KM_POSTS = []
+KM = {"fail": None}
+CHOICES = [{"code": "km", "title": "Пробег", "unit": "км"},
+           {"code": "engine_h", "title": "Моточасы ДВС", "unit": "м/ч"}]
+
+
+def fake_readings(method, path, kw):
+    if method == "GET" and path == "":
+        units = []
+        for code, title, cat in UNITS:
+            meters = [dict(m, this_week=code in KM_DONE)
+                      for m in KM_METERS.get(code, [])]
+            units.append({"code": code, "title": title, "category": cat,
+                          "meters": meters,
+                          "done": bool(meters) and code in KM_DONE})
+        return {"ok": True, "platform": True, "today": "2026-11-18",
+                "week_start": "2026-11-16", "meter_choices": CHOICES,
+                "units": units}
+    code = unquote(path.lstrip("/"))
+    if code not in TITLE:
+        raise B.PlatformError(f"Техники с кодом {code} нет в платформе.", 404)
+    if KM["fail"]:
+        raise B.PlatformError(KM["fail"], 400)
+    body = kw["json"]
+    KM_POSTS.append((code, body))
+    cur = {m["code"]: m for m in KM_METERS.setdefault(code, [])}
+    saved = []
+    for meter, value in body["readings"].items():
+        prev = cur.get(meter)
+        ch = next(c for c in CHOICES if c["code"] == meter)
+        saved.append({"code": meter, "title": ch["title"], "unit": ch["unit"],
+                      "value": value, "date": "2026-11-18",
+                      "prev_value": prev and prev["value"],
+                      "prev_date": prev and prev["date"],
+                      "delta": (value - prev["value"]) if prev else None})
+        if prev:
+            prev.update(value=value, date="2026-11-18")
+        else:
+            KM_METERS[code].append(dict(ch, value=value, date="2026-11-18"))
+    KM_DONE.add(code)
+    return {"ok": True, "unit": {"code": code, "title": TITLE[code]},
+            "saved": saved, "to_state": None}
+
+
+def km_buttons():
+    return [b[1] for b in buttons()]
+
+
+print("\n[17] Пробег за неделю: список, ввод, запись")
+mk = B.get_main_menu_keyboard(UID)
+menu = [(b if isinstance(b, dict) else b.__dict__).get("text")
+        for row in mk.keyboard for b in row]
+check("в нижнем меню есть «Пробег за неделю»", "📏 Пробег за неделю" in menu, menu)
+
+SENT.clear()
+B.clear_state(UID)
+B.qa_mode_users.add(UID)
+B.btn_km_handler(msg("📏 Пробег за неделю"))
+check("кнопка пробега выводит из режима вопросов", UID not in B.qa_mode_users)
+check("в списке — машины без показания за неделю: 2 из 2",
+      "Без показания за эту неделю: *2* из 2" in last(), last()[:200])
+check("неделя с понедельника", "Неделя с 16.11.2026" in last())
+check("кнопки B1 и J1, без машин без счётчика",
+      "km:B1" in km_buttons() and "km:J1" in km_buttons()
+      and "km:N1" not in km_buttons(), km_buttons())
+
+B.cb_km_unit(cb("km:B1"))
+check("спрашивает моточасы ДВС B1", "*Моточасы ДВС*, м/ч" in last(), last())
+check("показывает прошлое показание", "Прошлое: 600 м/ч на 08.11.2026" in last())
+
+B.handle_km_value(msg("500"))
+check("меньше прошлого — переспрашивает", "Меньше прошлого показания (600 м/ч)" in last())
+B.handle_km_value(msg("много"))
+check("не число — переспрашивает", "Не понял число" in last())
+check("после ошибок всё ещё ждём показание", B.get_state(UID)["step"] == "km_value")
+
+B.handle_km_value(msg("1 000,5"))
+check("итог: показание и пробег за неделю",
+      "*1 000,5* м/ч" in last() and "+400,5 м/ч с 08.11.2026" in last(), last())
+check("есть кнопка «Записать»", "kmsave" in km_buttons())
+
+B.cb_km_save(cb("kmsave"))
+check("в платформу ушло одно показание по B1",
+      KM_POSTS == [("B1", {"readings": {"engine_h": 1000.5}, "tg_id": UID,
+                           "author": "Асхат (@ash)"})], KM_POSTS)
+check("ответ: записано, с пробегом за неделю",
+      "Показания записаны" in last() and "+400,5 м/ч с 08.11.2026" in last(),
+      last())
+B.cb_km_save(cb("kmsave"))
+check("повторное нажатие не пишет второй раз", len(KM_POSTS) == 1)
+check("…и говорит, что уже сохранено", "уже сохранена" in last())
+
+B.cb_km_next(cb("kmnext"))
+check("«Следующая машина» — сразу J1, одометр",
+      B.get_state(UID).get("code") == "J1" and "*Пробег*, км" in last(), last())
+B.cb_km_skip(cb("kmskip"))
+check("всё пропущено — записывать нечего, кнопки «Записать» нет",
+      "записывать нечего" in last() and "kmsave" not in km_buttons())
+
+B.cb_km_unit(cb("km:J1"))
+B.handle_km_value(msg("126 500 км"))
+KM["fail"] = "Пробег: Дата показания в будущем."
+B.cb_km_save(cb("kmsave"))
+check("отказ платформы показан, можно повторить",
+      "не приняла показания" in last() and "kmsave" in km_buttons(), last())
+check("введённое не потеряно", B.get_state(UID)["values"] == {"km": 126500.0})
+KM["fail"] = None
+B.cb_km_save(cb("kmsave"))
+check("повтор записал J1", KM_POSTS[-1][0] == "J1"
+      and KM_POSTS[-1][1]["readings"] == {"km": 126500.0}, KM_POSTS[-1])
+
+B.cb_km_list(cb("kmlist"))
+check("все показания за неделю внесены", "показания за эту неделю внесены" in last(),
+      last())
+
+B.cb_km_all(cb("kmall:1"))
+check("«Все машины» — с отметкой ✅", any(
+    b[0].startswith("✅ B1") for b in buttons()), buttons()[:3])
+B.cb_km_unit(cb("km:N1"))
+check("у машины без счётчика — выбор счётчика",
+      "kmm:km" in km_buttons() and "ещё нет счётчика" in last(), last())
+B.cb_km_meter(cb("kmm:km"))
+check("после выбора — спрашивает пробег", "*Пробег*, км" in last()
+      and "Прошлых показаний нет" in last(), last())
+B.handle_km_value(msg("5000"))
+B.cb_km_save(cb("kmsave"))
+check("первое показание N1 записано",
+      KM_POSTS[-1] == ("N1", {"readings": {"km": 5000.0}, "tg_id": UID,
+                              "author": "Асхат (@ash)"}), KM_POSTS[-1])
+
+check("числа: 125430 → «125 430», 0.5 → «0,5»",
+      B.fmt_num(125430) == "125 430" and B.fmt_num(0.5) == "0,5"
+      and B.fmt_num(1000.25) == "1 000,25",
+      (B.fmt_num(125430), B.fmt_num(0.5), B.fmt_num(1000.25)))
+
+print("\n[18] Пробег: еженедельное напоминание")
+check("расписание: понятное — берётся, мусор — пропускается",
+      B.parse_remind("mon 09:00, пт 15:30, xx 10:00, mon 25:00")
+      == [(0, 9, 0), (4, 15, 30)], B.parse_remind("mon 09:00, пт 15:30"))
+KM_DONE.clear()                      # новая неделя — долги снова у всех
+B.MILEAGE_CHAT_ID = "-100555"
+B.MILEAGE_REMIND = [(0, 9, 0)]
+B.bot.get_me = lambda: pytypes.SimpleNamespace(username="remont_test_bot")
+SENT.clear()
+mon = _dt(2026, 11, 16, 9, 0, 30)
+check("в понедельник 09:00 напоминание уходит", B.km_reminder_tick(mon) is True)
+check("в нужный чат и со списком машин",
+      SENT[-1]["chat"] == "-100555" and "Без показания с 16.11.2026: *3*" in last()
+      and "B1 · Насосная установка · 882AHDE — 1 000,5 м/ч (18.11.2026)" in last(),
+      last())
+btn = SENT[-1]["markup"].keyboard[0][0]
+url = (btn if isinstance(btn, dict) else btn.__dict__).get("url")
+check("кнопка ведёт в бота на ввод пробега",
+      url == "https://t.me/remont_test_bot?start=km", url)
+check("в ту же минуту второй раз не уходит", B.km_reminder_tick(mon) is False)
+check("в другое время не уходит",
+      B.km_reminder_tick(_dt(2026, 11, 16, 9, 1)) is False
+      and B.km_reminder_tick(_dt(2026, 11, 17, 9, 0)) is False)
+KM_DONE.update({"B1", "J1", "N1"})
+n = len(SENT)
+check("долгов нет — напоминание не шлётся",
+      B.km_reminder_tick(_dt(2026, 11, 23, 9, 0)) is True and len(SENT) == n)
+
+SENT.clear()
+B.cmd_start(msg("/start km"))
+check("переход по кнопке из напоминания открывает пробег",
+      "Пробег за неделю" in last() and B.get_state(UID).get("step") == "km_list",
+      last()[:80])
 
 # ── Итог ──────────────────────────────────────────────────────────
 print("\n" + "═" * 60)
